@@ -5864,6 +5864,8 @@ class CellDef(QWidget):
                 for i, input in enumerate(self.param_d[cdname]["intracellular"]["inputs"]):
                     self.physiboss_add_input()
                     name, node, action, threshold, inact_threshold, smoothing, _, _ = self.physiboss_inputs[i]
+                    print("rwh:update_intracellular_params(): cdname=",cdname, ", input['name']=",input['name'])
+                    print("  param_d= ",self.param_d[cdname]["intracellular"])
                     name.setCurrentIndex(self.physiboss_signals.index(input["name"]))
                     node.setCurrentIndex(self.param_d[cdname]["intracellular"]["list_nodes"].index(input["node"]))
                     action.setCurrentIndex(1 if input["action"] == "inhibition" else 0)

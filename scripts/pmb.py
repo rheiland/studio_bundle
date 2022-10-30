@@ -29,6 +29,10 @@ from cell_def_tab import CellDef
 from microenv_tab import SubstrateDef 
 from populate_tree_cell_defs import populate_tree_cell_defs
 from user_params_tab import UserParams 
+from vis_tab import Vis 
+from ics_tab import ICs
+from run_tab import RunModel 
+from legend_tab import Legend 
         
 # from sbml_tab import SBMLParams 
 
@@ -67,7 +71,8 @@ class PhysiCellXMLCreator(QWidget):
         #     else:
         #         from vis_tab import Vis 
 
-        self.studio_flag = studio_flag 
+        # self.studio_flag = studio_flag 
+        self.studio_flag = True 
         self.skip_validate_flag = skip_validate_flag 
         self.rules_flag = rules_flag 
         self.model3D_flag = model3D_flag 
