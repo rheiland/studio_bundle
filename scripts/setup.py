@@ -20,6 +20,6 @@ setup(
         ('../data', glob('../data/*.cfg')),
     ],
     options={'py2app': OPTIONS},
-    py_modules=['config_tab','microenv_tab','cell_def_tab','user_params_tab'],
+    py_modules=['config_tab','microenv_tab','cell_def_tab','user_params_tab','ics_tab','run_tab','vis_tab','legend_tab'],
     setup_requires=['py2app'],
 )
