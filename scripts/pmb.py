@@ -1239,6 +1239,7 @@ def main():
     # pmb_app.setPalette(QtGui.QGuiApplication.palette())
 
     rules_flag = False
+    studio_flag = True  # for the app, let's do the Studio
     ex = PhysiCellXMLCreator(config_file, studio_flag, skip_validate_flag, rules_flag, model3D_flag, exec_file)
     ex.show()
     # startup_notice()
