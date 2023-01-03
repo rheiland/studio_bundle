@@ -56,7 +56,7 @@ Done!
 Then before successfully running the app, apparently we need to manually copy libs:
 ```
 * Apparently we need to manually copy over libs before trying to run the app:
-(myenv-conda) M1P~/git/studio_bundle/scripts$ pushd dist/PhysiCell_Studio.app/Contents/Frameworks
+(myenv-conda) M1P~/git/studio_bundle/scripts$  pushd dist/PhysiCell_Studio.app/Contents/Frameworks
 
 -  then just copy/paste these "cp" commands, copying from wherever your miniconda libs are:
 cp ~/opt/miniconda3/envs/myenv-conda/lib/libffi.7.dylib .
@@ -70,10 +70,13 @@ cp ~/opt/miniconda3/envs/myenv-conda/lib/libmkl_intel_thread.1.dylib .
 cp ~/opt/miniconda3/envs/myenv-conda/lib/libmkl_intel_thread.1.dylib .
 cp ~/opt/miniconda3/envs/myenv-conda/lib/libmkl_intel_lp64.1.dylib .
 cp ~/opt/miniconda3/envs/myenv-conda/lib/libmkl_avx2.1.dylib .
-pushd
 
-- try running the app:
-(myenv-conda) M1P~/git/studio_bundle/scripts$ dist/PhysiCell_Studio.app/Contents/MacOS/PhysiCell_Studio 
+- copy whatever executable model(s) we want to distribute
+pushd ../Resources/
+cp ~/git/studio_bundle/template-macos-intel template
+
+- try running the Studio app [and an executable model]:
+(myenv-conda) M1P~/git/studio_bundle/scripts$  dist/PhysiCell_Studio.app/Contents/MacOS/PhysiCell_Studio 
 ```
 
 If successful, zip up the bundle for distribution:
