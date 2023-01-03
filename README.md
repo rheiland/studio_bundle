@@ -1,17 +1,87 @@
-# studio_bundle - create a standalone installer bundle for PhysiCell Studio
+# studio_bundle - create standalone installer bundles for PhysiCell Studio
 
-Assuming you have installed miniconda3:
+## MacOS
+
+* We will use `py2app` to create the bundle (https://py2app.readthedocs.io/en/latest/)
+* Warning: if you have previously attempted to use pyinstaller (on MacOS), you should uninstall it.
+
+* Install Miniconda3: https://docs.conda.io/en/latest/miniconda.html 
 
 ```
+- May need to manually have miniconda be preferred in your shell:
 M1P~/git/studio_bundle$ sh /Users/heiland/opt/miniconda3/etc/profile.d/conda.sh
 M1P~/git/studio_bundle$ export PATH="/Users/heiland/opt/miniconda3/bin:$PATH"
-M1P~/git/studio_bundle$ env|grep path
-DOT_PATH=/usr/local/bin
-CMAKEPP_PATH=/Users/heiland/git/cmakepp/cmakepp/cmakepp.cmake
-PATH=/Users/heiland/opt/miniconda3/bin:/Users/heiland/anaconda3_x86/bin:/Users/heiland/anaconda3/bin:/opt/homebrew/bin:/usr/local/ssl/bin:.:/Users/heiland/dev/Bin:/Users/heiland/dev/auto/07p/cmds:/Users/heiland/dev/auto/07p/bin:/bin:/bin:/usr/local/bin:/usr/local/bin:/usr/local/sbin:/sbin:/usr/sbin:/bin:/usr/bin:/usr/X11R6/bin:/usr/texbin:/System/Library/Frameworks/Python.framework/Versions/2.7/bin::/usr/local/texlive/2013/bin/x86_64-darwin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin:/Library/TeX/texbin:/Library/Apple/usr/bin:/Users/heiland/dev/DependencyFinder-1.2.1-beta4/bin:/Applications/Pixar/RenderManProServer-21.5/bin:/Applications/ParaView-5.4.1.app/Contents/bin
 
+- Create and work from within a Python venv:
+(base) M1P~$ conda activate myenv-conda
+
+(myenv-conda) M1P~/git/studio_bundle/scripts$ which python
+/Users/heiland/opt/miniconda3/envs/myenv-conda/bin/python
+
+(myenv-conda) M1P~/git/studio_bundle/scripts$ which pip
+/Users/heiland/opt/miniconda3/envs/myenv-conda/bin/pip
+
+(myenv-conda) M1P~/git/studio_bundle/scripts$ which conda
+/Users/heiland/opt/miniconda3/condabin/conda
+  hmmm, not sure:
 M1P~/git/studio_bundle$ which conda
 /Users/heiland/opt/miniconda3/bin/conda
-M1P~/git/studio_bundle$ which python
-/Users/heiland/opt/miniconda3/bin/python
 ```
+
+- Install py2app:
+```
+pip install -U py2app
+```
+
+* Install the necessary Python modules in this venv that will be needed for the Studio
+
+```
+(myenv-conda) M1P~$ pip install PyQt5
+then:
+pip install matplotlib
+pip install pandas  # used by the pyMCDS*.py module
+pip install scipy   # seemed to be problematic; use conda to install instead
+pip uninstall scipy
+conda install scipy
+```
+
+Then from this repo:
+```
+(myenv-conda) M1P~/git/studio_bundle/scripts$ rm -rf dist build   # if these dirs exist from previous attempts
+(myenv-conda) M1P~/git/studio_bundle/scripts$ python setup.py py2app
+... spews out lots...
+Done!
+```
+
+Then before successfully running the app, apparently we need to manually copy libs:
+```
+* Apparently we need to manually copy over libs before trying to run the app:
+(myenv-conda) M1P~/git/studio_bundle/scripts$ pushd dist/PhysiCell_Studio.app/Contents/Frameworks
+
+-  then just copy/paste these "cp" commands, copying from wherever your miniconda libs are:
+cp ~/opt/miniconda3/envs/myenv-conda/lib/libffi.7.dylib .
+cp ~/opt/miniconda3/envs/myenv-conda/lib/libiomp5.dylib .
+cp ~/opt/miniconda3/envs/myenv-conda/lib/libgfortran.5.dylib .
+cp ~/opt/miniconda3/envs/myenv-conda/lib/libquadmath.0.dylib .
+cp ~/opt/miniconda3/envs/myenv-conda/lib/libgcc_s.1.1.dylib .
+cp ~/opt/miniconda3/envs/myenv-conda/lib/libmkl_rt.1.dylib .
+cp ~/opt/miniconda3/envs/myenv-conda/lib/libmkl_core.1.dylib .
+cp ~/opt/miniconda3/envs/myenv-conda/lib/libmkl_intel_thread.1.dylib .
+cp ~/opt/miniconda3/envs/myenv-conda/lib/libmkl_intel_thread.1.dylib .
+cp ~/opt/miniconda3/envs/myenv-conda/lib/libmkl_intel_lp64.1.dylib .
+cp ~/opt/miniconda3/envs/myenv-conda/lib/libmkl_avx2.1.dylib .
+pushd
+
+- try running the app:
+(myenv-conda) M1P~/git/studio_bundle/scripts$ dist/PhysiCell_Studio.app/Contents/MacOS/PhysiCell_Studio 
+```
+
+If successful, zip up the bundle for distribution:
+```
+(myenv-conda) M1P~/git/studio_bundle/scripts$ cd dist
+(myenv-conda) M1P~/git/studio_bundle/scripts/dist$ zip -r PhysiCell_Studio.zip PhysiCell_Studio.app
+```
+
+---
+
+## Windows
