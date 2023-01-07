@@ -45,12 +45,19 @@ pip uninstall scipy
 conda install scipy
 ```
 
-Then from this repo:
+If there's a new release of the Studio, update the scripts here and then:
 ```
+e.g.
+(myenv-conda) M1P~/git/studio_bundle/scripts$ cp ~/git/pmb-studio-dev/bin/cell_def_tab.py .
+(myenv-conda) M1P~/git/studio_bundle/scripts$ cp ~/git/pmb-studio-dev/VERSION.txt .
+
 (myenv-conda) M1P~/git/studio_bundle/scripts$ rm -rf dist build   # if these dirs exist from previous attempts
 (myenv-conda) M1P~/git/studio_bundle/scripts$ python setup.py py2app
 ... spews out lots...
 Done!
+
+then update where it expects the VERSION:
+(myenv-conda) M1P~/git/studio_bundle/scripts$ cp VERSION.txt dist/PhysiCell_Studio.app/Contents/.
 ```
 
 Then before successfully running the app, apparently we need to manually copy libs:
@@ -72,7 +79,7 @@ cp ~/opt/miniconda3/envs/myenv-conda/lib/libmkl_intel_lp64.1.dylib .
 cp ~/opt/miniconda3/envs/myenv-conda/lib/libmkl_avx2.1.dylib .
 
 - copy whatever executable model(s) we want to distribute
-pushd ../Resources/
+pushd ../Resources/   # i.e., ~/git/studio_bundle/scripts/dist/PhysiCell_Studio.app/Contents/Resources$
 cp ~/git/studio_bundle/template-macos-intel template
 
 - try running the Studio app [and an executable model]:
@@ -81,8 +88,14 @@ cp ~/git/studio_bundle/template-macos-intel template
 
 If successful, zip up the bundle for distribution:
 ```
+First, if you actually ran a simulation, you want to remove any output files:
+(myenv-conda) M1P~/git/studio_bundle/scripts$ rm dist/PhysiCell_Studio.app/Contents/Resources/output/*
+
 (myenv-conda) M1P~/git/studio_bundle/scripts$ cd dist
-(myenv-conda) M1P~/git/studio_bundle/scripts/dist$ zip -r PhysiCell_Studio.zip PhysiCell_Studio.app
+(myenv-conda) M1P~/git/studio_bundle/scripts/dist$ zip -r PhysiCell_Studio_mac.zip PhysiCell_Studio.app
+(myenv-conda) M1P~/git/studio_bundle/scripts/dist$ mv PhysiCell_Studio_mac.zip ../..
+
+and upload to wherever it's being hosted.
 ```
 
 ---
