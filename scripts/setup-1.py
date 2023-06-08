@@ -50,7 +50,7 @@ OPTIONS = {"plist" : {"NSRequiresAquaSystemAppearance": True},}
 
 setup(
     app=['PhysiCell_Studio.py'],
-    data_files=['physicell_logo_200px.png', 'checkmark.png',
+    data_files=['physicell_logo_200px.png',
         ('../data', glob('../data/*.xml')),
         ('../data', glob('../data/*.bnd')),
         ('../data', glob('../data/*.cfg')),
@@ -58,7 +58,7 @@ setup(
     options={'py2app': OPTIONS},
     setup_requires=['py2app'],
 
-   py_modules=['config_tab','microenv_tab','populate_tree_cell_defs','cell_def_tab','user_params_tab','ics_tab','rules_tab','run_tab','vis_base','vis_tab','legend_tab','pyMCDS_cells','pyMCDS'],
+   py_modules=['config_tab','microenv_tab','populate_tree_cell_defs','cell_def_tab','user_params_tab','ics_tab','run_tab','vis_tab','legend_tab','pyMCDS_cells'],
 #    py_modules=['config_tab','microenv_tab','cell_def_tab','user_params_tab','ics_tab','run_tab','legend_tab'],
     # py_modules=['config_tab','microenv_tab','cell_def_tab','user_params_tab'],
 )

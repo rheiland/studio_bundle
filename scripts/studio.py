@@ -1,13 +1,9 @@
 """
-PhysiCell_Studio.py - driving module for the PhysiCell Studido to read in a sample 
-PhysiCell config file (.xml), easily edit (e.g., change parameter values, 
-add/delete more "objects", including substrates and cell types), and save the 
-updated config file. Additional tabs for creating initial conditions for cells (.csv), 
-creating rules for cells, running a simulation, and visualizing output.
+studio.py - driving module for the PhysiCell Model Builder GUI to read in a sample PhysiCell config file (.xml), easily edit (e.g., change parameter values, add/delete more "objects", including substrates and cell types), and save the updated config file. In addition, the "Studio" feature adds additional GUI tabs for creating initial conditions for cells (.csv), running a simulation, and visualizing output.
 
 Authors:
 Randy Heiland (heiland@iu.edu): lead designer and developer
-Vincent Noel, Institut Curie: Cell Types|Intracellular|boolean (+ custom plots)
+Vincent Noel, Institut Curie: Cell Types|Intracellular|boolean
 Dr. Paul Macklin (macklinp@iu.edu): PI, funding and testing
 
 Macklin Lab members (grads & postdocs): testing, design, code contributions.
@@ -1303,8 +1299,7 @@ def main():
     studio_flag = True
     model3D_flag = False
     tensor_flag = False
-    # rules_flag = False
-    rules_flag = True
+    rules_flag = False
     skip_validate_flag = False
     nanohub_flag = False
     is_movable_flag = False

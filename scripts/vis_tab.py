@@ -1,34 +1,51 @@
 """
+vis_tab.py - provide visualization on Plot tab. Cells can be plotted on top of substrates/signals.
+
 Authors:
 Randy Heiland (heiland@iu.edu)
-Adam Morrow, Grant Waldrow, Drew Willis, Kim Crevecoeur
 Dr. Paul Macklin (macklinp@iu.edu)
-
+Rf. Credits.md
 """
 
+# import traceback
 import sys
 import os
-import logging
 import time
+# import inspect
 import xml.etree.ElementTree as ET  # https://docs.python.org/2/library/xml.etree.elementtree.html
 from pathlib import Path
+# from ipywidgets import Layout, Label, Text, Checkbox, Button, BoundedIntText, HBox, VBox, Box, \
+    # FloatText, Dropdown, SelectMultiple, RadioButtons, interactive
+# import matplotlib.pyplot as plt
+
+from vis_base import VisBase
 from matplotlib.colors import BoundaryNorm
 from matplotlib.ticker import MaxNLocator
 from matplotlib.collections import LineCollection
 from matplotlib.patches import Circle, Ellipse, Rectangle
 from matplotlib.collections import PatchCollection
 import matplotlib.colors as mplc
+from mpl_toolkits.axes_grid1.axes_divider import make_axes_locatable
 from matplotlib import gridspec
 from collections import deque
 import glob
+import csv
+import pandas
 
 from PyQt5 import QtCore, QtGui
-from PyQt5.QtWidgets import QFrame,QApplication,QWidget,QTabWidget,QFormLayout,QLineEdit, QHBoxLayout,QVBoxLayout,QRadioButton,QLabel,QCheckBox,QComboBox,QScrollArea,  QMainWindow,QGridLayout, QPushButton, QFileDialog, QMessageBox, QStackedWidget
+from PyQt5.QtWidgets import QFrame,QWidget,QCheckBox,QComboBox,QVBoxLayout,QLabel,QMessageBox
+# from PyQt5.QtWidgets import QFrame,QApplication,QWidget,QTabWidget,QFormLayout,QLineEdit, QGroupBox, QHBoxLayout,QVBoxLayout,QRadioButton,QLabel,QCheckBox,QComboBox,QScrollArea,  QMainWindow,QGridLayout, QPushButton, QFileDialog, QMessageBox, QStackedWidget, QSplitter
+# from PyQt5.QtWidgets import QCompleter, QSizePolicy
+# from PyQt5.QtCore import QSortFilterProxyModel
+from PyQt5.QtSvg import QSvgWidget
+from PyQt5.QtGui import QPainter
+from PyQt5.QtCore import QRectF, Qt
+locale_en_US = QtCore.QLocale(QtCore.QLocale.English, QtCore.QLocale.UnitedStates)
 
 import numpy as np
 import scipy.io
 from pyMCDS_cells import pyMCDS_cells 
-# from pyMCDS_rwh import pyMCDS
+from pyMCDS import pyMCDS
 import matplotlib
 matplotlib.use('Qt5Agg')
 import matplotlib.pyplot as plt
@@ -39,43 +56,73 @@ from mpl_toolkits.axes_grid1 import make_axes_locatable
 from matplotlib.backends.backend_qt5agg import FigureCanvasQTAgg
 # from matplotlib.figure import Figure
 
-class Vis(QWidget):
+#---------------------------------------------------------------
+class Vis(VisBase, QWidget):
 
-    def __init__(self, nanohub_flag):
-        super().__init__()
+    def __init__(self, nanohub_flag, config_tab, run_tab, model3D_flag, tensor_flag):
+        # super().__init__()
+        # super(Vis,self).__init__(a=a,b=b,c=c)
+        super(Vis,self).__init__(nanohub_flag=nanohub_flag, config_tab=config_tab, run_tab=run_tab, model3D_flag=model3D_flag,tensor_flag=tensor_flag)
+        # self.d=d
+        # super().__init__(nanohub_flag, run_tab, model3D_flag)
         # global self.config_params
 
+        self.figure = None
+
+        # self.vis2D = True
+        # self.model3D_flag = model3D_flag
+        # self.tensor_flag = tensor_flag
+
         self.circle_radius = 100  # will be set in run_tab.py using the .xml
-        self.mech_voxel_size = 30 # kinda weird this is essentially hard-coded in PhysiCell
+        self.mech_voxel_size = 30
 
-        self.voxel_dx = 20 # updated based on Config params of domain
-        self.voxel_dy = 20 
-
-        self.nanohub_flag = nanohub_flag
-        self.config_tab = None
+        # self.nanohub_flag = nanohub_flag
+        # self.run_tab = run_tab
+        # self.legend_tab = None
 
         self.bgcolor = [1,1,1,1]  # all 1.0 for white 
+
+        # self.population_plot = None
+        self.celltype_name = []
+        self.celltype_color = []
+        self.discrete_variable = None
 
         self.animating_flag = False
 
         self.xml_root = None
         self.current_svg_frame = 0
         self.timer = QtCore.QTimer()
-        # self.t.timeout.connect(self.task)
         self.timer.timeout.connect(self.play_plot_cb)
 
-        # self.tab = QWidget()
-        # self.tabs.resize(200,5)
-        
-        self.num_contours = 50
-        self.shading_choice = 'auto'  # 'auto'(was 'flat') vs. 'gouraud' (smooth)
+        self.fix_cmap_flag = False
+        # self.cells_edge_checked_flag = True
+        self.cell_edge = True
+        self.cell_fill = True
+        self.cell_line_width = 0.5
+        self.cell_line_width2 = 0.8
+        self.cell_alpha = 0.5
 
-        self.fontsize = 9
+        self.num_contours = 50
+        # self.shading_choice = 'auto'  # 'auto'(was 'flat') vs. 'gouraud' (smooth)
+        self.shading_choice = 'gouraud'  # 'auto'(was 'flat') vs. 'gouraud' (smooth)
+
+        self.fontsize = 7
+        self.label_fontsize = 6
         self.title_fontsize = 10
 
-        self.plot_svg_flag = True
+        # self.plot_svg_flag = True
+        self.plot_cells_svg = True
+
+        self.cell_scalars_l = []
+
         # self.plot_svg_flag = False
         self.field_index = 4  # substrate (0th -> 4 in the .mat)
+        self.substrate_name = None
+
+        self.plot_xmin = None
+        self.plot_xmax = None
+        self.plot_ymin = None
+        self.plot_ymax = None
 
         self.use_defaults = True
         self.title_str = ""
@@ -83,6 +130,8 @@ class Vis(QWidget):
         self.show_plot_range = False
 
         # self.config_file = "mymodel.xml"
+        self.physiboss_node_dict = {}
+        
         self.reset_model_flag = True
         self.xmin = -80
         self.xmax = 80
@@ -96,8 +145,11 @@ class Vis(QWidget):
 
         self.aspect_ratio = 0.7
 
+        self.view_aspect_square = True
+        # self.view_smooth_shading = False
+
         self.show_voxel_grid = False
-        self.show_mech_grid = False
+        self.show_mechanics_grid = False
         self.show_vectors = False
 
         self.show_nucleus = False
@@ -106,8 +158,11 @@ class Vis(QWidget):
         self.alpha = 0.7
 
         basic_length = 12.0
-        self.figsize_width_substrate = 15.0  # allow extra for colormap
+        self.figsize_width_substrate = 15.0  # allow extra for colormap(s)
         self.figsize_height_substrate = basic_length
+
+        self.cax1 = None
+        self.cax2 = None
 
         self.figsize_width_2Dplot = basic_length
         self.figsize_height_2Dplot = basic_length
@@ -123,19 +178,16 @@ class Vis(QWidget):
         # self.output_dir = "output"
         # self.output_dir = "../tmpdir"   # for nanoHUB
         # self.output_dir = "tmpdir"   # for nanoHUB
-        self.output_dir = "."   # for nanoHUB
 
+        # temporary debugging plotting without having to Run first
+        # if self.nanohub_flag:
+        #     self.output_dir = "."   # for nanoHUB
+        # else:
+        #     self.output_dir = "tmpdir"
 
-        # do in create_figure()?
-        # xlist = np.linspace(-3.0, 3.0, 50)
-        # print("len(xlist)=",len(xlist))
-        # ylist = np.linspace(-3.0, 3.0, 50)
-        # X, Y = np.meshgrid(xlist, ylist)
-        # Z = np.sqrt(X**2 + Y**2) + 10*np.random.rand()
-        # self.cmap = plt.cm.get_cmap("viridis")
-        # self.cs = self.ax0.contourf(X, Y, Z, cmap=self.cmap)
-        # self.cbar = self.figure.colorbar(self.cs, ax=self.ax)
-
+        # stop the insanity!
+        self.output_dir = "."   # for nanoHUB  (overwritten in studio.py, based on config_tab)
+        # self.output_dir = "tmpdir"   # for nanoHUB
 
         #-------------------------------------------
         label_width = 110
@@ -143,802 +195,96 @@ class Vis(QWidget):
         label_height = 20
         units_width = 70
 
-        # self.substrates_combobox = QComboBox(self)
-        self.substrates_combobox = QComboBox()
-        self.substrates_combobox.setEnabled(False)
-        self.field_dict = {}
-        self.field_min_max = {}
-        self.cmin_value = 0.0
-        self.cmax_value = 1.0
-        self.fixed_contour_levels = MaxNLocator(nbins=self.num_contours).tick_values(self.cmin_value, self.cmax_value)
+        # Beware: padding seems to alter the behavior; adding scroll arrows to choices list!
+                # padding-right: 8px; padding-left: 8px; padding-top: 3px; padding-bottom: 3px;
+                # height: 30px;
+            # QComboBox{
+            #     color: #000000;
+            #     background-color: #FFFFFF; 
+            #     height: 20px;
+            # }
+            # QComboBox:disabled {
+            #     background-color: rgb(199,199,199);
+            #     color: rgb(99,99,99);
+            # }
+        self.stylesheet = """ 
+            QPushButton{ border: 1px solid; border-color: rgb(145, 200, 145); border-radius: 1px;  background-color: lightgreen; color: black; width: 64px; padding-right: 8px; padding-left: 8px; padding-top: 3px; padding-bottom: 3px; } 
+            QPushButton:hover { border: 1px solid; border-radius: 3px; border-color: rgb(33, 77, 115); } QPushButton:focus { outline-color: transparent; border: 2px solid; border-color: rgb(151, 195, 243); } QPushButton:pressed{ background-color: rgb(145, 255, 145); } 
+            QPushButton:disabled { color: black; border-color: grey; background-color: rgb(199,199,199); }
 
-        self.myscroll = QScrollArea()  # might contain centralWidget
+            """
+            # QPushButton{ font-family: "Segoe UI"; font-size: 8pt; border: 1px solid; border-color: rgb(46, 103, 156); border-radius: 3px; padding-right: 10px; padding-left: 10px; padding-top: 5px; padding-bottom: 5px; background-color: rgb(77, 138, 201); color: white; font: bold; width: 64px; } 
+            # QPushButton{
+            #     color:#000000;
+            #     background-color: lightgreen; 
+            #     border-style: outset;
+            #     border-color: black;
+            #     padding: 2px;
+            # }
+            # QLineEdit:disabled {
+            #     background-color: rgb(199,199,199);
+            #     color: rgb(99,99,99);
+            # }
+            # QPushButton:disabled {
+            #     background-color: rgb(199,199,199);
+            # }
+                # color: #000000;
+                # background-color: #FFFFFF; 
+                # border-style: outset;
+                # border-width: 2px;
+                # border-radius: 10px;
+                # border-color: beige;
+                # font: bold 14px;
+                # min-width: 10em;
+                # padding: 6px;
+                # padding: 1px 18px 1px 3px;
+
+        # Need to have the substrates_combobox before doing create_figure!
+        self.canvas = None
         self.create_figure()
+        self.scroll_plot.setWidget(self.canvas) # self.config_params = QWidget()
 
-        self.config_params = QWidget()
-
-        # self.main_layout = QVBoxLayout()
-
-        self.vbox = QVBoxLayout()
-        self.vbox.addStretch(0)
-
-        self.stackw = QStackedWidget()
-        # self.stackw.setCurrentIndex(0)
-
-        #------------------
-        # controls_hbox = QHBoxLayout()
-        # w = QPushButton("Directory")
-        # w.clicked.connect(self.open_directory_cb)
-        # # if self.nanohub_flag:
-        # if self.nanohub_flag:
-        #     w.setEnabled(False)  # for nanoHUB
-        # controls_hbox.addWidget(w)
-
-        # # self.output_dir = "/Users/heiland/dev/PhysiCell_V.1.8.0_release/output"
-        # self.output_dir_w = QLineEdit()
-        # self.output_dir_w.setFixedWidth(domain_value_width)
-        # # w.setText("/Users/heiland/dev/PhysiCell_V.1.8.0_release/output")
-        # self.output_dir_w.setText(self.output_dir)
-        # if self.nanohub_flag:
-        #     self.output_dir_w.setEnabled(False)  # for nanoHUB
-        # # w.textChanged[str].connect(self.output_dir_changed)
-        # # w.textChanged.connect(self.output_dir_changed)
-        # controls_hbox.addWidget(self.output_dir_w)
-
-        self.controls1 = QWidget()
-        self.glayout1 = QGridLayout()
-        self.controls1.setLayout(self.glayout1)
-
-        arrow_button_width = 50
-        self.first_button = QPushButton("|<")
-        self.first_button.setFixedWidth(arrow_button_width)
-        self.first_button.clicked.connect(self.first_plot_cb)
-        # controls_hbox.addWidget(self.first_button)
-        icol = 0
-        irow = 0
-        self.glayout1.addWidget(self.first_button, irow,icol,1,1) # w, row, column, rowspan, colspan
-
-        self.back_button = QPushButton("<")
-        self.back_button.setFixedWidth(arrow_button_width)
-        self.back_button.clicked.connect(self.back_plot_cb)
-        # controls_hbox.addWidget(self.back_button)
-        icol += 1
-        self.glayout1.addWidget(self.back_button, irow,icol,1,1) # w, row, column, rowspan, colspan
-
-        frame_count_width = 40
-        self.frame_count = QLineEdit()
-        # self.frame_count.textChanged.connect(self.change_frame_count_cb)  # do later to appease the callback gods
-        self.frame_count.setFixedWidth(frame_count_width)
-        self.frame_count.setValidator(QtGui.QIntValidator(0,10000000))
-        self.frame_count.setText('0')
-        icol += 1
-        self.glayout1.addWidget(self.frame_count, irow,icol,1,1) # w, row, column, rowspan, colspan
+    #--------------------------------------
+    # def aspect_11_cb(self,bval):
+    #     print("vis_tab: aspect_11_cb()  self.aspect_11_checkbox.isChecked()= ",self.aspect_11_checkbox.isChecked())
+    #     # self.vis_tab.aspect_11_cb(self.aspect_11_checkbox.isChecked())
+    #     # self.view_aspect_square = bval
+    #     self.view_aspect_toggle_cb(bval)
 
 
-        self.forward_button = QPushButton(">")
-        self.forward_button.setFixedWidth(arrow_button_width)
-        self.forward_button.clicked.connect(self.forward_plot_cb)
-        # controls_hbox.addWidget(self.forward_button)
-        icol += 1
-        self.glayout1.addWidget(self.forward_button, irow,icol,1,1) # w, row, column, rowspan, colspan
-
-        self.last_button = QPushButton(">|")
-        self.last_button.setFixedWidth(arrow_button_width)
-        self.last_button.clicked.connect(self.last_plot_cb)
-        # controls_hbox.addWidget(self.last_button)
-        icol += 1
-        self.glayout1.addWidget(self.last_button, irow,icol,1,1) # w, row, column, rowspan, colspan
-
-        self.play_button = QPushButton("Play")
-        self.play_button.setFixedWidth(70)
-        self.play_button.setStyleSheet("background-color : lightgreen")
-        # self.play_button.clicked.connect(self.play_plot_cb)
-        self.play_button.clicked.connect(self.animate)
-        # controls_hbox.addWidget(self.play_button)
-        icol += 1
-        self.glayout1.addWidget(self.play_button, irow,icol,1,1) # w, row, column, rowspan, colspan
-
-        # self.prepare_button = QPushButton("Prepare")
-        # self.prepare_button.clicked.connect(self.prepare_plot_cb)
-        # controls_hbox.addWidget(self.prepare_button)
-
-        self.cells_checkbox = QCheckBox('Cells')
-        self.cells_checkbox.setChecked(True)
-        self.cells_checkbox.clicked.connect(self.cells_toggle_cb)
-        self.cells_checked_flag = True
-        # self.glayout1.addWidget(self.cells_checkbox, 0,5,1,2) # w, row, column, rowspan, colspan
-        icol += 1
-        self.glayout1.addWidget(self.cells_checkbox, irow,icol,1,1) # w, row, column, rowspan, colspan
-
-        self.cells_edge_checkbox = QCheckBox('edge')
-        self.cells_edge_checkbox.setChecked(True)
-        self.cells_edge_checkbox.clicked.connect(self.cells_edge_toggle_cb)
-        self.cells_edge_checked_flag = True
-        icol += 1
-        self.glayout1.addWidget(self.cells_edge_checkbox, irow,icol,1,1) # w, row, column, rowspan, colspan
-
-        self.cells_nucleus_checkbox = QCheckBox('nuclei')
-        self.cells_nucleus_checkbox.setChecked(self.show_nucleus)
-        self.cells_nucleus_checkbox.clicked.connect(self.cells_nucleus_toggle_cb)
-        icol += 1
-        self.glayout1.addWidget(self.cells_nucleus_checkbox, irow,icol,1,1) # w, row, column, rowspan, colspan
-
-        self.substrates_checkbox = QCheckBox('Substrates')
-        self.substrates_checkbox.setChecked(False)
-        # self.substrates_checkbox.setEnabled(False)
-        self.substrates_checkbox.clicked.connect(self.substrates_toggle_cb)
-        self.substrates_checked_flag = False
-        icol += 1
-        self.glayout1.addWidget(self.substrates_checkbox, irow,icol,1,2) # w, row, column, rowspan, colspan
-
-        self.fix_cmap_checkbox = QCheckBox('fix')
-        self.fix_cmap_flag = False
-        self.fix_cmap_checkbox.setEnabled(False)
-        self.fix_cmap_checkbox.setChecked(self.fix_cmap_flag)
-        self.fix_cmap_checkbox.clicked.connect(self.fix_cmap_toggle_cb)
-        icol += 2
-        self.glayout1.addWidget(self.fix_cmap_checkbox, irow,icol,1,1) # w, row, column, rowspan, colspan
-
-        cvalue_width = 70
-        label = QLabel("cmin")
-        # label.setFixedWidth(label_width)
-        label.setAlignment(QtCore.Qt.AlignCenter)
-        self.cmin = QLineEdit()
-        self.cmin.setEnabled(False)
-        self.cmin.setText('0.0')
-        # self.cmin.textChanged.connect(self.change_plot_range)
-        self.cmin.returnPressed.connect(self.cmin_cmax_cb)
-        self.cmin.setFixedWidth(cvalue_width)
-        self.cmin.setValidator(QtGui.QDoubleValidator())
-        self.cmin.setEnabled(False)
-        icol += 1
-        self.glayout1.addWidget(label, irow,icol,1,1) # w, row, column, rowspan, colspan
-        icol += 1
-        self.glayout1.addWidget(self.cmin, irow,icol,1,1) # w, row, column, rowspan, colspan
-
-        label = QLabel("cmax")
-        # label.setFixedWidth(label_width)
-        label.setAlignment(QtCore.Qt.AlignCenter)
-        self.cmax = QLineEdit()
-        self.cmin.setEnabled(False)
-        self.cmax.setText('1.0')
-        self.cmax.returnPressed.connect(self.cmin_cmax_cb)
-        self.cmax.setFixedWidth(cvalue_width)
-        self.cmax.setValidator(QtGui.QDoubleValidator())
-        self.cmax.setEnabled(False)
-        icol += 1
-        self.glayout1.addWidget(label, irow,icol,1,1) # w, row, column, rowspan, colspan
-        icol += 1
-        self.glayout1.addWidget(self.cmax, irow,icol,1,1) # w, row, column, rowspan, colspan
-
-        icol += 1
-        self.glayout1.addWidget(self.substrates_combobox, irow,icol,1,2) # w, row, column, rowspan, colspan
-        
-        #-----------
-        self.frame_count.textChanged.connect(self.change_frame_count_cb)
-
-
-        #-----------
-        self.output_dir_name = QLineEdit()
-        # self.frame_count.textChanged.connect(self.change_frame_count_cb)  # do later to appease the callback gods
-        # self.output_dir_name.setFixedWidth(frame_count_width)
-        self.output_dir_name.setText('')
-        irow += 1
-        icol = 0
-        self.glayout1.addWidget(self.output_dir_name, irow,icol,1,10) # w, row, column, rowspan, colspan
-
-        # self.controls1.setGeometry(QRect(20, 40, 601, 501))
-        # self.controls1.resize(500,30)
-        # self.stackw.addWidget(self.controls1)  # rwh: crap, just doing this causes it to disappear, even though we never add the stackw below!
-
-        # hbox = QHBoxLayout()
-        # hbox.addWidget(self.cells_checkbox)
-        # hbox.addWidget(self.substrates_checkbox)
-        # controls_hbox.addLayout(hbox)
-
-        #-------------------
-        self.controls2 = QWidget()
-        self.glayout2 = QGridLayout()
-        self.controls2.setLayout(self.glayout2)
-        # controls_hbox2 = QHBoxLayout()
-        visible_flag = True
-
-        label = QLabel("xmin")
-        label.setFixedWidth(label_width)
-        # label.setAlignment(QtCore.Qt.AlignRight)
-        label.setAlignment(QtCore.Qt.AlignCenter)
-        # controls_hbox2.addWidget(label)
-
-
-        domain_value_width = 60
-        self.my_xmin = QLineEdit()
-        self.my_xmin.textChanged.connect(self.change_plot_range)
-        self.my_xmin.setFixedWidth(domain_value_width)
-        self.my_xmin.setValidator(QtGui.QDoubleValidator())
-        # controls_hbox2.addWidget(self.my_xmin)
-        self.my_xmin.setVisible(visible_flag)
-        # controls_hbox2.addWidget(label)
-        self.glayout2.addWidget(label, 0,0,1,1) # w, row, column, rowspan, colspan
-        self.glayout2.addWidget(self.my_xmin, 0,1,1,1) # w, row, column, rowspan, colspan
-
-        label = QLabel("xmax")
-        label.setFixedWidth(label_width)
-        label.setAlignment(QtCore.Qt.AlignCenter)
-        # controls_hbox2.addWidget(label)
-        self.my_xmax = QLineEdit()
-        self.my_xmax.textChanged.connect(self.change_plot_range)
-        self.my_xmax.setFixedWidth(domain_value_width)
-        self.my_xmax.setValidator(QtGui.QDoubleValidator())
-        # controls_hbox2.addWidget(self.my_xmax)
-        self.my_xmax.setVisible(visible_flag)
-        self.glayout2.addWidget(label, 0,2,1,1) # w, row, column, rowspan, colspan
-        self.glayout2.addWidget(self.my_xmax, 0,3,1,1) # w, row, column, rowspan, colspan
-
-        label = QLabel("ymin")
-        label.setFixedWidth(label_width)
-        label.setAlignment(QtCore.Qt.AlignCenter)
-        # controls_hbox2.addWidget(label)
-        self.my_ymin = QLineEdit()
-        self.my_ymin.textChanged.connect(self.change_plot_range)
-        self.my_ymin.setFixedWidth(domain_value_width)
-        self.my_ymin.setValidator(QtGui.QDoubleValidator())
-        # controls_hbox2.addWidget(self.my_ymin)
-        self.my_ymin.setVisible(visible_flag)
-        self.glayout2.addWidget(label, 0,4,1,1) # w, row, column, rowspan, colspan
-        self.glayout2.addWidget(self.my_ymin, 0,5,1,1) # w, row, column, rowspan, colspan
-
-        label = QLabel("ymax")
-        label.setFixedWidth(label_width)
-        label.setAlignment(QtCore.Qt.AlignCenter)
-        # controls_hbox2.addWidget(label)
-        self.my_ymax = QLineEdit()
-        self.my_ymax.textChanged.connect(self.change_plot_range)
-        self.my_ymax.setFixedWidth(domain_value_width)
-        self.my_ymax.setValidator(QtGui.QDoubleValidator())
-        # controls_hbox2.addWidget(self.my_ymax)
-        self.my_ymax.setVisible(visible_flag)
-        self.glayout2.addWidget(label, 0,6,1,1) # w, row, column, rowspan, colspan
-        self.glayout2.addWidget(self.my_ymax, 0,7,1,1) # w, row, column, rowspan, colspan
-
-        w = QPushButton("Reset")
-        w.clicked.connect(self.reset_plot_range)
-        self.glayout2.addWidget(w, 0,8,1,1) # w, row, column, rowspan, colspan
-        # controls_hbox2.addWidget(w)
-
-        self.my_xmin.setText(str(self.xmin))
-        self.my_xmax.setText(str(self.xmax))
-        self.my_ymin.setText(str(self.ymin))
-        self.my_ymax.setText(str(self.ymax))
-
-        #-------------------
-        # arg, Qt layouts drive me insane. This doesn't work - trying to combine both rows of controls!
-        # self.controls3 = QWidget()
-        # self.controls3_layout = QVBoxLayout()
-        # # self.controls3_layout = QGridLayout()
-        # # doing this shows nothing!
-        # # self.controls3_layout.addLayout(self.glayout2)
-        # # self.controls3_layout.addLayout(self.glayout1)
-        # # self.controls3_layout.addWidget(self.controls1, 0,0,1,8) # w, row, column, rowspan, colspan
-        # # self.controls3_layout.addWidget(self.controls2, 1,0,1,8) # w, row, column, rowspan, colspan
-
-        # # doing this shows only the controls2!
-        # self.controls3_layout.addWidget(self.controls2, alignment=QtCore.Qt.AlignCenter) 
-        # self.controls3_layout.addWidget(self.controls1, alignment=QtCore.Qt.AlignCenter)
-
-        # self.controls3.setLayout(self.controls3_layout)
-
-        #-------------------
-        self.substrates_combobox.currentIndexChanged.connect(self.substrates_combobox_changed_cb)
-
-        # controls_vbox = QVBoxLayout()
-        # controls_vbox.addLayout(controls_hbox)
-        # controls_vbox.addLayout(controls_hbox2)
-
-        #==================================================================
-        self.config_params.setLayout(self.vbox)
-
-        self.myscroll.setVerticalScrollBarPolicy(QtCore.Qt.ScrollBarAlwaysOn)
-        self.myscroll.setHorizontalScrollBarPolicy(QtCore.Qt.ScrollBarAlwaysOn)
-        self.myscroll.setWidgetResizable(True)
-
-        # self.myscroll.setWidget(self.config_params) # self.config_params = QWidget()
-        self.myscroll.setWidget(self.canvas) # self.config_params = QWidget()
-        self.layout = QVBoxLayout(self)
-        # self.layout.addLayout(controls_hbox)
-        # self.layout.addLayout(controls_hbox2)
-        # self.layout.addLayout(controls_vbox)
-        # self.layout.addLayout(self.glayout)
-
-        # self.layout.addWidget(self.controls1)
-
-        self.stackw.addWidget(self.controls1)
-        # self.stackw.addWidget(self.controls2)
-        # self.stackw.addWidget(self.controls3)
-
-        self.stackw.setCurrentIndex(0)
-        # self.stackw.setFixedHeight(40)  # if we don't specify a fixed height, these controls take up ~50% of window
-        self.stackw.setFixedHeight(80)  # if we don't specify a fixed height, these controls take up ~50% of window
-        # self.stackw.setFixedHeight(35)  # weird effects
-        # self.stackw.resize(700,100)
-        self.layout.addWidget(self.stackw)
-        self.show_plot_range = False
-        # if self.show_plot_range:
-        #     self.layout.addWidget(self.controls2)
-        # self.layout.addWidget(self.my_xmin)
-        self.layout.addWidget(self.myscroll)
-        # self.layout.addStretch()
-
-        # self.create_figure()
-
-
-    def update_output_dir(self, dir_path):
-        if os.path.isdir(dir_path):
-            print("update_output_dir(): yes, it is a dir path", dir_path)
-        else:
-            print("update_output_dir(): NO, it is NOT a dir path", dir_path)
-        self.output_dir = dir_path
-        self.output_dir_name.setText(dir_path)
-
-    def reset_plot_range(self):
-        try:  # due to the initial callback
-            self.my_xmin.setText(str(self.xmin))
-            self.my_xmax.setText(str(self.xmax))
-            self.my_ymin.setText(str(self.ymin))
-            self.my_ymax.setText(str(self.ymax))
-
-            self.plot_xmin = float(self.xmin)
-            self.plot_xmax = float(self.xmax)
-            self.plot_ymin = float(self.ymin)
-            self.plot_ymax = float(self.ymax)
-            logging.debug(f'------ reset_plot_range(): plot_ymin,ymax=  {self.plot_ymin},{self.plot_ymax}')
-        except:
-            pass
-
-        self.update_plots()
-
-
-    def show_hide_plot_range(self):
-        # print("vis_tab: show_hide_plot_range()")
-        logging.debug(f'show_hide_plot_range(): self.stackw.count()= {self.stackw.count()}')
-        # print('self.show_plot_range= ',self.show_plot_range)
-        # print(" # items = ",self.layout.num_items())
-        # item = self.layout.itemAt(1)
-        # print('item= ',item)
-
-        self.show_plot_range = not self.show_plot_range
-        # print('self.show_plot_range= ',self.show_plot_range)
-        if self.show_plot_range:
-            # self.glayout2.addWidget(self.controls2)
-            # self.layout.addWidget(self.controls2)
-            # self.controls2.setVisible(True)
-            self.stackw.setCurrentIndex(1)
-            # self.stackw.setFixedHeight(80)
-        else:
-            self.stackw.setCurrentIndex(0)
-            # self.stackw.setFixedHeight(40)
-            # self.glayout2.removeWidget(self.controls2)
-            # self.controls2.setVisible(False)
-            # self.layout.removeWidget(self.controls2)
-            # self.self.controls2.deleteLater()
-            # self.controls2.deleteLater()
-            # if item != None :
-            #     widget = item.widget()
-            #     print('widget= ',widget)
-            #     if widget != None:
-            #         self.layout.removeWidget(widget)
-            #         widget.deleteLater()
-
-    def change_frame_count_cb(self):
-        try:  # due to the initial callback
-            self.current_svg_frame = int(self.frame_count.text())
-        except:
-            pass
-        self.update_plots()
-
-    def cmin_cmax_cb(self):
-        # print("----- cmin_cmax_cb:")
-        try:  # due to the initial callback
-            self.cmin_value = float(self.cmin.text())
-            self.cmax_value = float(self.cmax.text())
-            self.fixed_contour_levels = MaxNLocator(nbins=self.num_contours).tick_values(self.cmin_value, self.cmax_value)
-        except:
-            pass
-        self.update_plots()
-
-    def init_plot_range(self, config_tab):
-        # print("----- init_plot_range:")
-        try:
-            # beware of widget callback 
-            self.my_xmin.setText(config_tab.xmin.text())
-            self.my_xmax.setText(config_tab.xmax.text())
-            self.my_ymin.setText(config_tab.ymin.text())
-            self.my_ymax.setText(config_tab.ymax.text())
-            self.my_dx.setText(config_tab.xdel.text())
-            self.my_dy.setText(config_tab.ydel.text())
-        except:
-            pass
-
-    def change_plot_range(self):
-        # print("\n----- change_plot_range:")
-        # print("----- my_xmin= ",self.my_xmin.text())
-        # print("----- my_xmax= ",self.my_xmax.text())
-        try:  # due to the initial callback
-            self.plot_xmin = float(self.my_xmin.text())
-            self.plot_xmax = float(self.my_xmax.text())
-            self.plot_ymin = float(self.my_ymin.text())
-            self.plot_ymax = float(self.my_ymax.text())
-        except:
-            pass
-
-        self.update_plots()
-
+    #--------------------------------------
+    # Dependent on 2D/3D
     def update_plots(self):
+        # print("------ vis_tab.py: update_plots()")
+        # for line in traceback.format_stack():
+        #     print(line.strip())
         self.ax0.cla()
         if self.substrates_checked_flag:  # do first so cells are plotted on top
             self.plot_substrate(self.current_svg_frame)
         if self.cells_checked_flag:
-            self.plot_svg(self.current_svg_frame)
+            if self.plot_cells_svg:
+                self.plot_svg(self.current_svg_frame)
+            else:
+                self.plot_cell_scalar(self.current_svg_frame)
 
-        if self.show_voxel_grid:
-            self.plot_voxel_grid()
-        if self.show_mech_grid:
-            self.plot_mechanics_grid()
-        # if self.show_vectors:
-            # self.plot_vecs()
-
+        self.called_from_update = True
         self.frame_count.setText(str(self.current_svg_frame))
+        self.called_from_update = False
 
         self.canvas.update()
         self.canvas.draw()
 
-    def fill_substrates_combobox(self, substrate_list):
-        # print("vis_tab.py: ------- fill_substrates_combobox")
-        # print("substrate_list = ",substrate_list )
-        self.substrates_combobox.clear()
-        idx = 0
-        for s in substrate_list:
-            # print(" --> ",s)
-            self.substrates_combobox.addItem(s)
-            self.field_dict[idx] = s   # e.g., self.field_dict = {0:'director signal', 1:'cargo signal'}
-            self.field_min_max[s]= [0,1,False]
-            # self.field_min_max[s][1] = 1
-            # self.field_min_max[s][2] = False
-            idx += 1
-        # print('field_dict= ',self.field_dict)
-        # print('field_min_max= ',self.field_min_max)
-        # self.substrates_combobox.setCurrentIndex(2)  # not working; gets reset to oxygen somehow after a Run
 
-    def substrates_combobox_changed_cb(self,idx):
-        # print("----- vis_tab.py: substrates_combobox_changed_cb: idx = ",idx)
-        self.field_index = 4 + idx # substrate (0th -> 4 in the .mat)
-        self.update_plots()
-
-
-    def open_directory_cb(self):
-        dialog = QFileDialog()
-        # self.output_dir = dialog.getExistingDirectory(self, 'Select an output directory')
-        tmp_dir = dialog.getExistingDirectory(self, 'Select an output directory')
-        # print("open_directory_cb:  tmp_dir=",tmp_dir)
-        if tmp_dir == "":
-            return
-
-        self.output_dir = tmp_dir
-        self.output_dir_w.setText(self.output_dir)
-        self.reset_model()
-
-    def reset_model(self):
-        # print("\n--------- vis_tab: reset_model ----------")
-        # Verify initial.xml and at least one .svg file exist. Obtain bounds from initial.xml
-        # tree = ET.parse(self.output_dir + "/" + "initial.xml")
-        xml_file = Path(self.output_dir, "initial.xml")
-        if not os.path.isfile(xml_file):
-            logging.debug(f'vis_tab:reset_model(): Warning: Expecting initial.xml, but does not exist.')
-            # msgBox = QMessageBox()
-            # msgBox.setIcon(QMessageBox.Information)
-            # msgBox.setText("Did not find 'initial.xml' in the output directory. Will plot a dummy substrate until you run a simulation.")
-            # msgBox.setStandardButtons(QMessageBox.Ok)
-            # msgBox.exec()
-            return
-
-        tree = ET.parse(Path(self.output_dir, "initial.xml"))
-        xml_root = tree.getroot()
-
-        bds_str = xml_root.find(".//microenvironment//domain//mesh//bounding_box").text
-        bds = bds_str.split()
-        # print('bds=',bds)
-        self.xmin = float(bds[0])
-        self.xmax = float(bds[3])
-        # self.xdel = 
-        logging.debug(f'vis_tab.py: reset_model(): self.xmin, xmax= {self.xmin}, {self.xmax}')
-        self.x_range = self.xmax - self.xmin
-        self.plot_xmin = self.xmin
-        self.plot_xmax = self.xmax
-        # print("--------- self.plot_xmax = ",self.plot_xmax)
-
-        try:
-            self.my_xmin.setText(str(self.plot_xmin))
-            self.my_xmax.setText(str(self.plot_xmax))
-            self.my_ymin.setText(str(self.plot_ymin))
-            self.my_ymax.setText(str(self.plot_ymax))
-        except:
-            pass
-
-        self.ymin = float(bds[1])
-        self.ymax = float(bds[4])
-        # self.ydel = 
-        self.y_range = self.ymax - self.ymin
-        # print('reset_model(): self.ymin, ymax=',self.ymin, self.ymax)
-        self.plot_ymin = self.ymin
-        self.plot_ymax = self.ymax
-
-        xcoords_str = xml_root.find(".//microenvironment//domain//mesh//x_coordinates").text
-        xcoords = xcoords_str.split()
-        # print('reset_model(): xcoords=',xcoords)
-        # print('reset_model(): len(xcoords)=',len(xcoords))
-        self.numx =  len(xcoords)
-
-        ycoords_str = xml_root.find(".//microenvironment//domain//mesh//y_coordinates").text
-        ycoords = ycoords_str.split()
-        # print('reset_model(): ycoords=',ycoords)
-        # print('reset_model(): len(ycoords)=',len(ycoords))
-        self.numy =  len(ycoords)
-        # print("-------------- vis_tab.py: reset_model() -------------------")
-        # print("reset_model(): self.numx, numy = ",self.numx,self.numy)
-
-        #-------------------
-        vars_uep = xml_root.find(".//microenvironment//domain//variables")
-        if vars_uep:
-            sub_names = []
-            for var in vars_uep:
-            # self.substrate.clear()
-            # self.param[substrate_name] = {}  # a dict of dicts
-
-            # self.tree.clear()
-                idx = 0
-            # <microenvironment_setup>
-		    #   <variable name="food" units="dimensionless" ID="0">
-                # print(cell_def.attrib['name'])
-                if var.tag == 'variable':
-                    substrate_name = var.attrib['name']
-                    # print("substrate: ",substrate_name )
-                    sub_names.append(substrate_name)
-                self.substrates_combobox.clear()
-                # print("sub_names = ",sub_names)
-                self.substrates_combobox.addItems(sub_names)
-
-        self.cmin_value = 0.0
-        self.cmax_value = 1.0
-
-        # and plot 1st frame (.svg)
-        self.current_svg_frame = 0
-        # self.forward_plot_cb("")  
-
-        self.fill_substrates_combobox(sub_names)
-
-
-    def reset_axes(self):
-        # print("--------- vis_tab: reset_axes ----------")
-        # Verify initial.xml and at least one .svg file exist. Obtain bounds from initial.xml
-        # tree = ET.parse(self.output_dir + "/" + "initial.xml")
-        xml_file = Path(self.output_dir, "initial.xml")
-        if not os.path.isfile(xml_file):
-            print("vis_tab.py: reset_axes(): Expecting initial.xml, but does not exist.")
-            logging.debug(f'vis_tab.py: reset_axes(): Expecting initial.xml, but does not exist.')
-            msgBox = QMessageBox()
-            msgBox.setIcon(QMessageBox.Information)
-            msgBox.setText("Did not find 'initial.xml' in this directory.")
-            msgBox.setStandardButtons(QMessageBox.Ok)
-            msgBox.exec()
-            return
-
-        tree = ET.parse(Path(self.output_dir, "initial.xml"))
-        xml_root = tree.getroot()
-
-        bds_str = xml_root.find(".//microenvironment//domain//mesh//bounding_box").text
-        bds = bds_str.split()
-        # print('bds=',bds)
-        self.xmin = float(bds[0])
-        self.xmax = float(bds[3])
-        self.x_range = self.xmax - self.xmin
-
-        self.ymin = float(bds[1])
-        self.ymax = float(bds[4])
-        self.y_range = self.ymax - self.ymin
-
-        # and plot 1st frame (.svg)
-        self.current_svg_frame = 0
-        # self.forward_plot_cb("")  
-
-
-    # def output_dir_changed(self, text):
-    #     self.output_dir = text
-    #     print(self.output_dir)
-
-    def first_plot_cb(self, text):
-        if self.reset_model_flag:
-            self.reset_model()
-            self.reset_model_flag = False
-
-        self.current_svg_frame = 0
-        self.update_plots()
-
-    def last_plot_cb(self, text):
-        if self.reset_model_flag:
-            self.reset_model()
-            self.reset_model_flag = False
-
-        logging.debug(f'last_plot_cb(): cwd = {os.getcwd()}')
-        logging.debug(f'last_plot_cb(): self.output_dir = {self.output_dir}')
-        # xml_file = Path(self.output_dir, "initial.xml")
-        # xml_files = glob.glob('tmpdir/output*.xml')
-
-        # full_fname = os.path.join(self.output_dir, fname)
-        xml_files = glob.glob(self.output_dir + '/output*.xml')
-        logging.debug(f'xml_files = {xml_files}')
-        if len(xml_files) == 0:
-            logging.debug(f'last_plot_cb(): no xml_files, returning')
-            return
-        xml_files.sort()
-        # rwh: problematic with celltypes3 due to snapshot_standard*.svg and snapshot<8digits>.svg
-        svg_files = glob.glob(self.output_dir + '/snapshot*.svg')
-        svg_files.sort()
-        # print('xml_files = ',xml_files)
-        num_xml = len(xml_files)
-        # print('svg_files = ',svg_files)
-        num_svg = len(svg_files)
-        logging.debug(f'num_xml, num_svg = {num_xml}, {num_svg}')
-        last_xml = int(xml_files[-1][-12:-4])
-        last_svg = int(svg_files[-1][-12:-4])
-        logging.debug(f'last_xml, _svg = {last_xml}, {last_svg}')
-        self.current_svg_frame = last_xml
-        if last_svg < last_xml:
-            self.current_svg_frame = last_svg
-        self.update_plots()
-
-    def back_plot_cb(self, text):
-        if self.reset_model_flag:
-            self.reset_model()
-            self.reset_model_flag = False
-
-        self.current_svg_frame -= 1
-        if self.current_svg_frame < 0:
-            self.current_svg_frame = 0
-        logging.debug(f'back_plot_cb(): svg # {self.current_svg_frame}')
-
-        self.update_plots()
-
-
-    def forward_plot_cb(self, text):
-        if self.reset_model_flag:
-            self.reset_model()
-            self.reset_model_flag = False
-
-        self.current_svg_frame += 1
-        # print('svg # ',self.current_svg_frame)
-
-        self.update_plots()
-
-
-    # def task(self):
-            # self.dc.update_figure()
-
-    # used by animate
-    def play_plot_cb(self):
-        for idx in range(1):
-            self.current_svg_frame += 1
-            # print('svg # ',self.current_svg_frame)
-
-            fname = "snapshot%08d.svg" % self.current_svg_frame
-            full_fname = os.path.join(self.output_dir, fname)
-            # print("full_fname = ",full_fname)
-            # with debug_view:
-                # print("plot_svg:", full_fname) 
-            # print("-- plot_svg:", full_fname) 
-            if not os.path.isfile(full_fname):
-                # print("Once output files are generated, click the slider.")   
-                logging.debug(f'play_plot_cb():  Reached the end (or no output files found).')
-                # self.timer.stop()
-                self.current_svg_frame -= 1
-                self.animating_flag = True
-                # self.current_svg_frame = 0
-                self.animate()
-                return
-
-            self.update_plots()
-
-
-    def cells_toggle_cb(self,bval):
-        self.cells_checked_flag = bval
-        self.cells_edge_checkbox.setEnabled(bval)
-        self.cells_nucleus_checkbox.setEnabled(bval)
-        self.update_plots()
-
-    def cells_edge_toggle_cb(self,bval):
-        self.cells_edge_checked_flag = bval
-        self.update_plots()
-
-    def cells_nucleus_toggle_cb(self,bval):
-        self.show_nucleus = bval
-        self.update_plots()
-
-
-    def substrates_toggle_cb(self,bval):
-        self.substrates_checked_flag = bval
-        self.fix_cmap_checkbox.setEnabled(bval)
-        self.substrates_combobox.setEnabled(bval)
-
-        self.update_plots()
-
-    def fix_cmap_toggle_cb(self,bval):
-        logging.debug(f'fix_cmap_toggle_cb():')
-        self.fix_cmap_flag = bval
-        self.cmin.setEnabled(bval)
-        self.cmax.setEnabled(bval)
-
-            # self.substrates_combobox.addItem(s)
-        # field_name = self.field_dict[self.substrate_choice.value]
-        logging.debug(f'self.field_dict= {self.field_dict}')
-        # field_name = self.field_dict[self.substrates_combobox.currentText()]
-        field_name = self.substrates_combobox.currentText()
-        logging.debug(f'field_name= {field_name}')
-        # print(self.cmap_fixed_toggle.value)
-        # if (self.colormap_fixed_toggle.value):  # toggle on fixed range
-        if (bval):  # toggle on fixed range
-            # self.colormap_min.disabled = False
-            # self.colormap_max.disabled = False
-            self.field_min_max[field_name][0] = self.cmin.text
-            self.field_min_max[field_name][1] = self.cmax.text
-            self.field_min_max[field_name][2] = True
-            # self.save_min_max.disabled = False
-        else:  # toggle off fixed range
-            # self.colormap_min.disabled = True
-            # self.colormap_max.disabled = True
-            self.field_min_max[field_name][2] = False
-
-        self.update_plots()
-
-
-    def animate(self):
-        if not self.animating_flag:
-            self.animating_flag = True
-            self.play_button.setText("Pause")
-            self.play_button.setStyleSheet("background-color : red")
-
-            if self.reset_model_flag:
-                self.reset_model()
-                self.reset_model_flag = False
-
-            # self.current_svg_frame = 0
-            self.timer.start(1)
-
-        else:
-            self.animating_flag = False
-            self.play_button.setText("Play")
-            self.play_button.setStyleSheet("background-color : lightgreen")
-            self.timer.stop()
-
-
-    # def play_plot_cb0(self, text):
-    #     for idx in range(10):
-    #         self.current_svg_frame += 1
-    #         print('svg # ',self.current_svg_frame)
-    #         self.plot_svg(self.current_svg_frame)
-    #         self.canvas.update()
-    #         self.canvas.draw()
-    #         # time.sleep(1)
-    #         # self.ax0.clear()
-    #         # self.canvas.pause(0.05)
-
-    def prepare_plot_cb(self, text):
-        self.current_svg_frame += 1
-        logging.debug(f'\n   ====>     prepare_plot_cb(): svg # {self.current_svg_frame}')
-        self.update_plots()
-
-
+    #------------------------------
+    # Depends on 2D/3D
     def create_figure(self):
-        logging.debug(f'vis_tab.py: --------- create_figure(): ------- creating figure, canvas, ax0')
+        print("\n--   vis_tab.py: --------- create_figure(): ------- creating figure, canvas, ax0")
+        if self.figure is not None:
+            print("              self.figure is None, so return!")
+            return
         self.figure = plt.figure()
         self.canvas = FigureCanvasQTAgg(self.figure)
+        print("     self.canvas= ",self.canvas)
         self.canvas.setStyleSheet("background-color:transparent;")
 
         # Adding one subplot for image
@@ -953,136 +299,6 @@ class Vis(QWidget):
 
         self.reset_model()
 
-        # np.random.seed(19680801)  # for reproducibility
-        # N = 50
-        # x = np.random.rand(N) * 2000
-        # y = np.random.rand(N) * 2000
-        # colors = np.random.rand(N)
-        # area = (30 * np.random.rand(N))**2  # 0 to 15 point radii
-        # self.ax0.scatter(x, y, s=area, c=colors, alpha=0.5)
-
-        # if self.plot_svg_flag:
-        # if False:
-        #     self.plot_svg(self.current_svg_frame)
-        # else:
-        #     self.plot_substrate(self.current_svg_frame)
-
-        logging.debug(f'vis_tab.py: create_figure(): ------- creating dummy contourf')
-        xlist = np.linspace(-3.0, 3.0, 50)
-        logging.debug(f'vis_tab.py: len(xlist)= {len(xlist)}')
-        ylist = np.linspace(-3.0, 3.0, 50)
-        X, Y = np.meshgrid(xlist, ylist)
-        Z = np.sqrt(X**2 + Y**2) + 10*np.random.rand()
-
-        self.cmap = plt.cm.get_cmap("viridis")
-        self.mysubstrate = self.ax0.contourf(X, Y, Z, cmap=self.cmap)
-        # if self.field_index > 4:
-        #     # plt.contour(xgrid, ygrid, M[self.field_index, :].reshape(self.numy,self.numx), [0.0])
-        #     plt.contour(X, Y, Z, [0.0])
-
-        # levels = MaxNLocator(nbins=self.num_contours).tick_values(self.cmin_value, self.cmax_value)
-
-#rwh - not for this demo
-        # self.cbar = self.figure.colorbar(self.mysubstrate, ax=self.ax0)
-        # self.cbar.ax.tick_params(labelsize=self.fontsize)
-
-        # substrate_plot = self.ax0.contourf(xgrid, ygrid, M[self.field_index, :].reshape(self.numy,self.numx), num_contours, cmap='viridis')  # self.colormap_dd.value)
-
-        logging.debug(f'vis_tab.py: ------------create_figure():  # axes = {len(self.figure.axes)}')
-
-        # self.imageInit = [[255] * 320 for i in range(240)]
-        # self.imageInit[0][0] = 0
-
-        # Init image and add colorbar
-        # self.image = self.ax0.imshow(self.imageInit, interpolation='none')
-        # divider = make_axes_locatable(self.ax0)
-        # cax = divider.new_vertical(size="5%", pad=0.05, pack_start=True)
-        # self.colorbar = self.figure.add_axes(cax)
-        # self.figure.colorbar(self.image, cax=cax, orientation='horizontal')
-
-        # plt.subplots_adjust(left=0, bottom=0.05, right=1, top=1, wspace=0, hspace=0)
-
-        self.plot_substrate(self.current_svg_frame)
-        self.plot_svg(self.current_svg_frame)
-        # self.canvas.draw()
-
-    #---------------------------------------------------------------------------
-    def circles(self, x, y, s, c='b', vmin=None, vmax=None, **kwargs):
-        """
-        See https://gist.github.com/syrte/592a062c562cd2a98a83 
-
-        Make a scatter plot of circles. 
-        Similar to plt.scatter, but the size of circles are in data scale.
-        Parameters
-        ----------
-        x, y : scalar or array_like, shape (n, )
-            Input data
-        s : scalar or array_like, shape (n, ) 
-            Radius of circles.
-        c : color or sequence of color, optional, default : 'b'
-            `c` can be a single color format string, or a sequence of color
-            specifications of length `N`, or a sequence of `N` numbers to be
-            mapped to colors using the `cmap` and `norm` specified via kwargs.
-            Note that `c` should not be a single numeric RGB or RGBA sequence 
-            because that is indistinguishable from an array of values
-            to be colormapped. (If you insist, use `color` instead.)  
-            `c` can be a 2-D array in which the rows are RGB or RGBA, however. 
-        vmin, vmax : scalar, optional, default: None
-            `vmin` and `vmax` are used in conjunction with `norm` to normalize
-            luminance data.  If either are `None`, the min and max of the
-            color array is used.
-        kwargs : `~matplotlib.collections.Collection` properties
-            Eg. alpha, edgecolor(ec), facecolor(fc), linewidth(lw), linestyle(ls), 
-            norm, cmap, transform, etc.
-        Returns
-        -------
-        paths : `~matplotlib.collections.PathCollection`
-        Examples
-        --------
-        a = np.arange(11)
-        circles(a, a, s=a*0.2, c=a, alpha=0.5, ec='none')
-        plt.colorbar()
-        License
-        --------
-        This code is under [The BSD 3-Clause License]
-        (http://opensource.org/licenses/BSD-3-Clause)
-        """
-
-        if np.isscalar(c):
-            kwargs.setdefault('color', c)
-            c = None
-
-        if 'fc' in kwargs:
-            kwargs.setdefault('facecolor', kwargs.pop('fc'))
-        if 'ec' in kwargs:
-            kwargs.setdefault('edgecolor', kwargs.pop('ec'))
-        if 'ls' in kwargs:
-            kwargs.setdefault('linestyle', kwargs.pop('ls'))
-        if 'lw' in kwargs:
-            kwargs.setdefault('linewidth', kwargs.pop('lw'))
-        # You can set `facecolor` with an array for each patch,
-        # while you can only set `facecolors` with a value for all.
-
-        zipped = np.broadcast(x, y, s)
-        patches = [Circle((x_, y_), s_)
-                for x_, y_, s_ in zipped]
-        collection = PatchCollection(patches, **kwargs)
-        if c is not None:
-            c = np.broadcast_to(c, zipped.shape).ravel()
-            collection.set_array(c)
-            collection.set_clim(vmin, vmax)
-
-        # ax = plt.gca()
-        # ax.add_collection(collection)
-        # ax.autoscale_view()
-        self.ax0.add_collection(collection)
-        self.ax0.autoscale_view()
-        # plt.draw_if_interactive()
-        if c is not None:
-            # plt.sci(collection)
-            self.ax0.sci(collection)
-        # return collection
-
     #------------------------------------------------------------
     # not currently used, but maybe useful
     def plot_vecs(self):
@@ -1095,10 +311,7 @@ class Vis(QWidget):
         try:
             # mcds = pyMCDS_cells(fname)
             # print("plot_vecs(): self.output_dir= ",self.output_dir)
-
-            # mcds = pyMCDS_cells(fname, self.output_dir)
-            mcds = pyMCDS(fname, self.output_dir)
-
+            mcds = pyMCDS_cells(fname, self.output_dir)
             # print(mcds.get_cell_variables())
 
             xpos = mcds.data['discrete_cells']['position_x']
@@ -1126,12 +339,13 @@ class Vis(QWidget):
             self.line_collection = LineCollection(vlines, color="black", linewidths=0.5)
             self.ax0.add_collection(self.line_collection)
         except:
-            logging.debug(f'vis_tab.py: plot_vecs(): ERROR')
+            print("plot_vecs(): ERROR")
             pass
 
     #------------------------------------------------------------
     # This is primarily used for debugging.
     def plot_voxel_grid(self):
+        # print("--------- plot_voxel_grid()")
         #  Should we actually parse/use coords in initial.xml, e.g.:
         #      <x_coordinates delimiter=" ">-490.000000 -470.000000
         # xoffset = self.xdel / 2.0
@@ -1152,15 +366,11 @@ class Vis(QWidget):
         self.ax0.add_collection(line_collection)
 
     #------------------------------------------------------------
-    # This is primarily used for debugging tricky mechanics dynamics; probably hardly ever used.
     def plot_mechanics_grid(self):
-        # numx = int((self.xmax - self.xmin)/self.mech_voxel_size)
-        # numy = int((self.ymax - self.ymin)/self.mech_voxel_size)
-        # xs = np.linspace(self.xmin,self.xmax, numx)
-        # ys = np.linspace(self.ymin,self.ymax, numy)
-        xs = np.arange(self.xmin,self.xmax+1,self.mech_voxel_size)  # DON'T try to use np.linspace!
-        # print("xs= ",xs)
-        ys = np.arange(self.ymin,self.ymax+1,self.mech_voxel_size)
+        numx = int((self.xmax - self.xmin)/self.mech_voxel_size)
+        numy = int((self.ymax - self.ymin)/self.mech_voxel_size)
+        xs = np.linspace(self.xmin,self.xmax, numx)
+        ys = np.linspace(self.ymin,self.ymax, numy)
         hlines = np.column_stack(np.broadcast_arrays(xs[0], ys, xs[-1], ys))
         vlines = np.column_stack(np.broadcast_arrays(xs, ys[0], xs, ys[-1]))
         grid_lines = np.concatenate([hlines, vlines]).reshape(-1, 2, 2)
@@ -1172,21 +382,6 @@ class Vis(QWidget):
         # ax.set_ylim(ys[0], ys[-1])
 
     #------------------------------------------------------------
-    # For debugging.
-    # def plot_voxel_grid(self):
-    #     numx = int((self.xmax - self.xmin)/self.xdel)
-    #     numy = int((self.ymax - self.ymin)/self.ydel)
-    #     xs = np.linspace(self.xmin,self.xmax, numx)
-    #     ys = np.linspace(self.ymin,self.ymax, numy)
-    #     hlines = np.column_stack(np.broadcast_arrays(xs[0], ys, xs[-1], ys))
-    #     vlines = np.column_stack(np.broadcast_arrays(xs, ys[0], xs, ys[-1]))
-    #     grid_lines = np.concatenate([hlines, vlines]).reshape(-1, 2, 2)
-    #     line_collection = LineCollection(grid_lines, color="gray", linewidths=0.5)
-    #     # ax = plt.gca()
-    #     # ax.add_collection(line_collection)
-    #     self.ax0.add_collection(line_collection)
-
-    #------------------------------------------------------------
     # def plot_svg(self, frame, rdel=''):
     def plot_svg(self, frame):
         # global current_idx, axes_max
@@ -1194,10 +389,10 @@ class Vis(QWidget):
 
         # return
 
-        # if self.show_voxel_grid:
-        #     self.plot_voxel_grid()
-        # if self.show_mech_grid:
-        #     self.plot_mechanics_grid()
+        if self.show_voxel_grid:
+            self.plot_voxel_grid()
+        if self.show_mechanics_grid:
+            self.plot_mechanics_grid()
 
         # if self.show_vectors:
         #     self.plot_vecs()
@@ -1206,6 +401,7 @@ class Vis(QWidget):
         # self.current_frame = frame
         fname = "snapshot%08d.svg" % frame
         full_fname = os.path.join(self.output_dir, fname)
+        # print("-- plot_svg(): full_fname= ",full_fname)
         # try:
         #     print("   ==>>>>> plot_svg(): full_fname=",full_fname)
         # except:
@@ -1216,7 +412,7 @@ class Vis(QWidget):
         # print("-- plot_svg:", full_fname) 
         if not os.path.isfile(full_fname):
             # print("Once output files are generated, click the slider.")   
-            logging.debug(f'vis_tab.py: plot_svg(): Warning: filename not found: {full_fname}')
+            print("vis_tab.py: plot_svg(): Warning: full_fname not found: ",full_fname)
             return
 
         # self.ax0.cla()
@@ -1246,18 +442,9 @@ class Vis(QWidget):
 #        tree = ET.parse(fname)
         try:
             tree = ET.parse(full_fname)
-        except:  # might arrive here if user cancels a Run then tries to go to last frame (>|) in Plot tab
-            logging.debug(f'vis_tab.py: ------ plot_svg(): error trying to parse {fname}. Will try previous file.')
-            if frame > 0:
-                frame -= 1
-                fname = "snapshot%08d.svg" % frame
-                full_fname = os.path.join(self.output_dir, fname)
-                try:
-                    tree = ET.parse(full_fname)
-                except:  # might arrive here if user cancels a Run then tries to go to last frame (>|) in Plot tab
-                    logging.debug(f'vis_tab.py: ------ plot_svg(): error trying to parse {fname}')
-                    return
-            # return
+        except:
+            print("------ plot_svg(): error trying to parse ",full_name)
+            return
         root = tree.getroot()
         #  print('--- root.tag ---')
         #  print(root.tag)
@@ -1274,7 +461,7 @@ class Vis(QWidget):
             if child.text and "Current time" in child.text:
                 svals = child.text.split()
                 # remove the ".00" on minutes
-                self.title_str += "   cells: " + svals[2] + "d, " + svals[4] + "h, " + svals[7][:-3] + "m"
+                self.title_str += svals[2] + " days, " + svals[4] + " hrs, " + svals[7][:-3] + " mins"
 
                 # self.cell_time_mins = int(svals[2])*1440 + int(svals[4])*60 + int(svals[7][:-3])
                 # self.title_str += "   cells: " + str(self.cell_time_mins) + "m"   # rwh
@@ -1351,13 +538,13 @@ class Vis(QWidget):
                 # test for bogus x,y locations (rwh TODO: use max of domain?)
                 too_large_val = 10000.
                 if (np.fabs(xval) > too_large_val):
-                    logging.debug(f'bogus xval= {xval}')
+                    print("bogus xval=", xval)
                     break
                 yval = float(circle.attrib['cy'])
                 # yval = (yval - self.svg_xmin)/self.svg_xrange * self.y_range + self.ymin
                 yval = yval/self.y_range * self.y_range + self.ymin
                 if (np.fabs(yval) > too_large_val):
-                    logging.debug(f'bogus yval= {yval}')
+                    print("bogus yval=", yval)
                     break
 
                 rval = float(circle.attrib['r'])
@@ -1368,8 +555,9 @@ class Vis(QWidget):
                 rlist.append(rval)
                 rgba_list.append(rgba)
 
-                # For .svg files with cells that *have* a nucleus, there will be a 2nd pass
+                # For .svg files with cells that *have* a nucleus, there will be a 2nd
                 if (not self.show_nucleus):
+                #if (not self.show_nucleus):
                     break
 
             num_cells += 1
@@ -1384,99 +572,269 @@ class Vis(QWidget):
         xvals = np.array(xlist)
         yvals = np.array(ylist)
         rvals = np.array(rlist)
-        # rgbs = np.array(rgb_list)
         rgbas = np.array(rgba_list)
         # print("xvals[0:5]=",xvals[0:5])
         # print("rvals[0:5]=",rvals[0:5])
         # print("rvals.min, max=",rvals.min(),rvals.max())
 
-        # rwh - is this where I change size of render window?? (YES - yipeee!)
-        #   plt.figure(figsize=(6, 6))
-        #   plt.cla()
-        # if (self.substrates_toggle.value):
         self.title_str += " (" + str(num_cells) + " agents)"
-            # title_str = " (" + str(num_cells) + " agents)"
-        # else:
-            # mins= round(int(float(root.find(".//current_time").text)))  # TODO: check units = mins
-            # hrs = int(mins/60)
-            # days = int(hrs/24)
-            # title_str = '%dd, %dh, %dm' % (int(days),(hrs%24), mins - (hrs*60))
-        # plt.title(self.title_str)
         self.ax0.set_title(self.title_str, fontsize=self.title_fontsize)
-        # self.ax0.set_title(self.title_str, prop={'size':'small'})
 
-        # plt.xlim(self.xmin, self.xmax)
-        # plt.ylim(self.ymin, self.ymax)
-
-        # print("plot_svg(): plot_xmin,xmax, ymin,ymax= ",self.plot_xmin,self.plot_xmax,self.plot_ymin,self.plot_ymax)
-        # set xrange & yrange of plots
         self.ax0.set_xlim(self.plot_xmin, self.plot_xmax)
-        # self.ax0.set_xlim(-450, self.xmax)
-
         self.ax0.set_ylim(self.plot_ymin, self.plot_ymax)
-        # self.ax0.set_ylim(0.0, self.ymax)
+
         self.ax0.tick_params(labelsize=self.fontsize)
 
         self.ax0.set_facecolor(self.bgcolor)
 
-        # self.ax0.colorbar(collection)
+        if (self.cell_fill):
+            if (self.cell_edge):
+                try:
+                    self.circles(xvals,yvals, s=rvals, color=rgbas,  edgecolor='black', linewidth=self.cell_line_width)
+                except (ValueError):
+                    pass
+            else:
+                self.circles(xvals,yvals, s=rvals, color=rgbas )
+        else:  # transparent cells, but with (thicker) edges
+            self.circles(xvals,yvals, s=rvals, color=(1,1,1,0),  edgecolor=rgbas, linewidth=self.cell_line_width2) 
 
-        #   plt.xlim(axes_min,axes_max)
-        #   plt.ylim(axes_min,axes_max)
-        #   plt.scatter(xvals,yvals, s=rvals*scale_radius, c=rgbs)
 
-        # TODO: make figsize a function of plot_size? What about non-square plots?
-        # self.fig = plt.figure(figsize=(9, 9))
-
-#        axx = plt.axes([0, 0.05, 0.9, 0.9])  # left, bottom, width, height
-#        axx = fig.gca()
-#        print('fig.dpi=',fig.dpi) # = 72
-
-        #   im = ax.imshow(f.reshape(100,100), interpolation='nearest', cmap=cmap, extent=[0,20, 0,20])
-        #   ax.xlim(axes_min,axes_max)
-        #   ax.ylim(axes_min,axes_max)
-
-        # convert radii to radii in pixels
-        # ax1 = self.fig.gca()
-        # N = len(xvals)
-        # rr_pix = (ax1.transData.transform(np.vstack([rvals, rvals]).T) -
-        #             ax1.transData.transform(np.vstack([np.zeros(N), np.zeros(N)]).T))
-        # rpix, _ = rr_pix.T
-
-        # markers_size = (144. * rpix / self.fig.dpi)**2   # = (2*rpix / fig.dpi * 72)**2
-        # markers_size = markers_size/4000000.
-        # print('max=',markers_size.max())
-
-        #rwh - temp fix - Ah, error only occurs when "edges" is toggled on
-        # if (self.show_edge):
-        if (self.cells_edge_checked_flag):
-            try:
-                # plt.scatter(xvals,yvals, s=markers_size, c=rgbs, edgecolor='black', linewidth=0.5)
-                # self.circles(xvals,yvals, s=rvals, color=rgbas, alpha=self.alpha, edgecolor='black', linewidth=0.5)
-                # print("--- plotting circles with edges!!")
-                self.circles(xvals,yvals, s=rvals, color=rgbas, edgecolor='black', linewidth=0.5)  # alpha=0.5
-                # cell_circles = self.circles(xvals,yvals, s=rvals, color=rgbs, edgecolor='black', linewidth=0.5)
-                # plt.sci(cell_circles)
-            except (ValueError):
-                pass
+        if self.view_aspect_square:
+            self.ax0.set_aspect('equal')
         else:
-            # plt.scatter(xvals,yvals, s=markers_size, c=rgbs)
-            # self.circles(xvals,yvals, s=rvals, color=rgbas, alpha=self.alpha)
-            # print("--- plotting circles without edges!!")
-            self.circles(xvals,yvals, s=rvals, color=rgbas)
+            self.ax0.set_aspect('auto')
+    
+    #-----------------------------------------------------
+    # def cell_scalar_cbar_combobox_changed_cb(self,idx):
+    #     # print("\n>vis_tab-------->> cell_scalar_cbar_combobox_changed_cb(): cbar_name= ", cbar_name)
+    #     self.update_plots()
 
-        self.ax0.set_aspect(1.0)
+    #-----------------------------------------------------
+    def plot_cell_scalar(self, frame):
+        if self.disable_cell_scalar_cb:
+            return
+            
+        if self.show_voxel_grid:
+            self.plot_voxel_grid()
+        if self.show_mechanics_grid:
+            self.plot_mechanics_grid()
 
-    #------------------------------------------------------------
-    def plot_substrate(self, frame):
-        # global current_idx, axes_max
-        global current_frame
 
         xml_file_root = "output%08d.xml" % frame
         xml_file = os.path.join(self.output_dir, xml_file_root)
+        # xml_file = os.path.join("tmpdir", xml_file_root)  # temporary hack
+        cell_scalar_name = self.cell_scalar_combobox.currentText()
+        cbar_name = self.cell_scalar_cbar_combobox.currentText()
+        # print(f"\n\n   >>>>--------- plot_cell_scalar(): xml_file={xml_file}, scalar={cell_scalar_name}, cbar={cbar_name}")
         if not Path(xml_file).is_file():
-            logging.debug(f'vis_tab.py: ERROR: file not found {xml_file}')
+            print("ERROR: file not found",xml_file)
             return
+
+        mcds = pyMCDS(xml_file_root, self.output_dir, microenv=False, graph=False, verbose=False)
+        total_min = mcds.get_time()
+        
+        if self.physiboss_vis_flag:
+            try:
+                cell_types = mcds.get_cell_df()["cell_type"]
+            except:
+                print("vis_tab.py: plot_cell_scalar(): error performing mcds.get_cell_df()['cell_type']")
+                return
+            
+            physiboss_state_file = os.path.join(self.output_dir, "states_%08d.csv" % frame)
+            
+            if not Path(physiboss_state_file).is_file():
+                print("vis_tab.py: plot_cell_scalar(): error file not found ",physiboss_state_file)
+                return
+            
+            cell_scalar = {}
+            with open(physiboss_state_file, newline='') as csvfile:
+                states_reader = csv.reader(csvfile, delimiter=',')
+                    
+                for row in states_reader:
+                    if row[0] != 'ID':
+                        ID = int(row[0])
+                        if cell_types[ID] == self.physiboss_selected_cell_line:
+                            nodes = row[1].split(" -- ")                      
+                            if self.physiboss_selected_node in nodes:
+                                cell_scalar.update({ID: 2})      
+                            else:
+                                cell_scalar.update({ID: 0})
+                        else:
+                            cell_scalar.update({ID: 9})
+                            
+            cell_scalar = pandas.Series(cell_scalar)
+            
+            # To plot green/red/grey cells, we use a qualitative cell map called Set1
+            cbar_name = "Set1"
+            vmin = 0
+            vmax = 9
+            
+        else:
+            try:
+                cell_scalar = mcds.get_cell_df()[cell_scalar_name]
+            except:
+                print("vis_tab.py: plot_cell_scalar(): error performing mcds.get_cell_df()[cell_scalar_name]")
+                msgBox = QMessageBox()
+                msgBox.setIcon(QMessageBox.Information)
+                # msg = "plot_cell_scalar(): error from mcds.get_cell_df()[" + cell_scalar_name + "]. You are probably trying to use out-of-date scalars. Resetting to .svg plots, so you will need to refresh the cell scalar dropdown combobox in the Plot tab."
+                msg = "plot_cell_scalar(): error from mcds.get_cell_df()[" + cell_scalar_name + "]. You may be trying to use out-of-date scalars. Please reset the 'full list' or 'partial'."
+                msgBox.setText(msg)
+                msgBox.setStandardButtons(QMessageBox.Ok)
+                msgBox.exec()
+                # kill any animation ("Play" button) happening
+                self.animating_flag = False
+                self.play_button.setText("Play")
+                self.timer.stop()
+
+                # self.cells_svg_rb.setChecked(True)
+                # self.plot_cells_svg = True
+                # self.disable_cell_scalar_widgets()
+                return
+        
+                    
+            if self.fix_cells_cmap_flag:
+                vmin = self.cells_cmin_value
+                vmax = self.cells_cmax_value
+            else:
+                vmin = cell_scalar.min()
+                vmax = cell_scalar.max()
+            
+        num_cells = len(cell_scalar)
+        # print("  len(cell_scalar) = ",len(cell_scalar))
+        # fix_cmap = 0
+        # print(f'   cell_scalar.min(), max() = {vmin}, {vmax}')
+        cell_vol = mcds.get_cell_df()['total_volume']
+        # print(f'   cell_vol.min(), max() = {cell_vol.min()}, {cell_vol.max()}')
+
+        four_thirds_pi =  4.188790204786391
+        cell_radii = np.divide(cell_vol, four_thirds_pi)
+        cell_radii = np.power(cell_radii, 0.333333333333333333333333333333333333333)
+
+        xvals = mcds.get_cell_df()['position_x']
+        yvals = mcds.get_cell_df()['position_y']
+
+        # self.title_str += "   cells: " + svals[2] + "d, " + svals[4] + "h, " + svals[7][:-3] + "m"
+        # self.title_str = "(" + str(frame) + ") Current time: " + str(total_min) + "m"
+        
+        # print(cell_scalar_name, " - discrete: ", (cell_scalar % 1  == 0).all()) # Possible test if the variable is discrete or continuum variable (issue: in some time the continuum variable can be classified as discrete (example time=0))
+        
+        # if( cell_scalar_name == 'cell_type' or cell_scalar_name == 'current_phase'): discrete_variable = list(set(cell_scalar)) # It's a set of possible value of the variable
+        if cell_scalar_name in self.discrete_cell_scalars: 
+            if cell_scalar_name == "current_phase":   # and if "Fixed" range is checked
+                self.cycle_phases = [0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18, 100,101,102,103,104]
+                # if self.discrete_variable is None:
+                self.discrete_variable = self.cycle_phases
+            else:
+                self.discrete_variable = list(set(cell_scalar)) # It's a set of possible value of the variable
+        # if( discrete_variable ): # Generic way: if variable is discrete
+            self.cell_scalar_cbar_combobox.setEnabled(False)
+            from_list = matplotlib.colors.LinearSegmentedColormap.from_list
+            self.discrete_variable.sort()
+            if (len(self.discrete_variable) == 1): 
+                cbar_name = from_list(None, plt.cm.Set1(range(0,2)), len(self.discrete_variable))
+            else: 
+                cbar_name = from_list(None, plt.cm.Set1(range(0,len(self.discrete_variable))), len(self.discrete_variable))
+            vmin = None
+            vmax = None
+            # Change the values between 0 and number of possible values
+            for i, value in enumerate(self.discrete_variable):
+                cell_scalar = cell_scalar.replace(value,i)
+        else: 
+            self.cell_scalar_cbar_combobox.setEnabled(True)
+
+        mins = total_min
+        hrs = int(mins/60)
+        days = int(hrs/24)
+        self.title_str = '%d days, %d hrs, %d mins' % (days, hrs-days*24, mins-hrs*60)
+        self.title_str += " (" + str(num_cells) + " agents)"
+
+        axes_min = mcds.get_mesh()[0][0][0][0]
+        axes_max = mcds.get_mesh()[0][0][-1][0]
+
+        if (self.cell_fill):
+            if (self.cell_edge):
+                try:
+                    cell_plot = self.circles(xvals,yvals, s=cell_radii, c=cell_scalar, edgecolor='black', linewidth=self.cell_line_width, cmap=cbar_name, vmin=vmin, vmax=vmax)
+                    # cell_plot = self.circles(xvals,yvals, s=cell_radii, edgecolor=cell_scalar, linewidth=0.5, cmap=cbar_name, vmin=vmin, vmax=vmax)
+                except (ValueError):
+                    print("\n------ ERROR: Exception from circles with edges\n")
+                    pass
+            else:
+                # cell_plot = self.circles(xvals,yvals, s=cell_radii, c=cell_scalar, cmap=cbar_name)
+                cell_plot = self.circles(xvals,yvals, s=cell_radii, c=cell_scalar, cmap=cbar_name, vmin=vmin, vmax=vmax)
+
+        else:  # semi-trransparent cell, but with (thicker) edge  (TODO: how to make totally transparent?)
+            if (self.cell_edge):
+                cell_plot = self.circles(xvals,yvals, s=cell_radii, c=cell_scalar, edgecolor='black', linewidth=self.cell_line_width2, cmap=cbar_name, vmin=vmin, vmax=vmax, alpha=self.cell_alpha)
+            else:
+                cell_plot = self.circles(xvals,yvals, s=cell_radii, c=cell_scalar, cmap=cbar_name, vmin=vmin, vmax=vmax, alpha=self.cell_alpha)
+
+
+        # print("------- plot_cell_scalar() -------------")
+        num_axes =  len(self.figure.axes)
+        # print("# axes = ",num_axes)
+        # if num_axes > 1: 
+        # if self.axis_id_cellscalar:
+        if not self.physiboss_vis_flag:
+            if self.cax2:
+                try:
+                    self.cax2.remove()
+                except:
+                    pass
+                # print("# axes(after cell_scalar remove) = ",len(self.figure.axes))
+                # print(" self.figure.axes= ",self.figure.axes)
+                #ppp
+                ax2_divider = make_axes_locatable(self.ax0)
+                self.cax2 = ax2_divider.append_axes("bottom", size="4%", pad="8%")
+                self.cbar2 = self.figure.colorbar(cell_plot, cax=self.cax2, orientation="horizontal")
+
+                # print("\n# axes(redraw cell_scalar) = ",len(self.figure.axes))
+                # print(" self.figure.axes= ",self.figure.axes)
+                # self.axis_id_cellscalar = len(self.figure.axes) - 1
+                self.cbar2.ax.tick_params(labelsize=self.fontsize)
+                self.cbar2.ax.set_xlabel(cell_scalar_name)
+            else:
+                ax2_divider = make_axes_locatable(self.ax0)
+                self.cax2 = ax2_divider.append_axes("bottom", size="4%", pad="8%")
+                self.cbar2 = self.figure.colorbar(cell_plot, cax=self.cax2, orientation="horizontal")
+                self.cbar2.ax.tick_params(labelsize=self.fontsize)
+                # print(" self.figure.axes= ",self.figure.axes)
+                self.cbar2.ax.set_xlabel(cell_scalar_name)
+        
+        elif self.cax2:
+            try:
+                    self.cax2.remove()
+            except:
+                pass
+        
+        if( self.discrete_variable ): # Generic way: if variable is discrete
+            self.cbar2 = self.figure.colorbar(cell_plot, ticks=range(0,len(self.discrete_variable)), cax=self.cax2, orientation="horizontal")
+            # self.cbar2.ax.tick_params(length=0) # remove tick line
+            cell_plot.set_clim(vmin=-0.5,vmax=len(self.discrete_variable)-0.5) # scaling bar to the center of the ticks
+            self.cbar2.set_ticklabels(self.discrete_variable) # It's possible to give strings
+            self.cbar2.ax.set_xlabel(cell_scalar_name)
+   
+        self.ax0.set_title(self.title_str, fontsize=self.title_fontsize)
+        self.ax0.set_xlim(self.plot_xmin, self.plot_xmax)
+        self.ax0.set_ylim(self.plot_ymin, self.plot_ymax)
+
+        if self.view_aspect_square:
+            self.ax0.set_aspect('equal')
+        else:
+            self.ax0.set_aspect('auto')
+
+
+    #------------------------------------------------------------
+    def plot_substrate(self, frame):
+
+        # f=1/0  # force segfault
+        xml_file_root = "output%08d.xml" % frame
+        xml_file = os.path.join(self.output_dir, xml_file_root)
+        if not Path(xml_file).is_file():
+            print("ERROR: file not found",xml_file)
+            return
+
+        cbar_name = self.substrates_cbar_combobox.currentText()
 
         # xml_file = os.path.join(self.output_dir, xml_file_root)
         tree = ET.parse(xml_file)
@@ -1490,33 +848,32 @@ class Vis(QWidget):
 
         fname = "output%08d_microenvironment0.mat" % frame
         full_fname = os.path.join(self.output_dir, fname)
-        # print("vis_tab.py:    ==>>>>> plot_substrate(): full_fname=",full_fname)
+        # print("\n    ==>>>>> plot_substrate(): full_fname=",full_fname)
         if not Path(full_fname).is_file():
-            print("vis_tab.py: ERROR: file not found",full_fname)
-            logging.debug(f'vis_tab.py: ERROR: file not found {full_fname}')
+            print("ERROR: file not found",full_fname)
             return
 
         info_dict = {}
         scipy.io.loadmat(full_fname, info_dict)
         M = info_dict['multiscale_microenvironment']
-        logging.debug(f'vis_tab.py: plot_substrate: self.field_index= {self.field_index}')
+        # print('plot_substrate: self.field_index=',self.field_index)
 
         # debug
         # fsub = M[self.field_index,:]   # 
         # print("substrate min,max=",fsub.min(), fsub.max())
 
         # print("M.shape = ",M.shape)  # e.g.,  (6, 421875)  (where 421875=75*75*75)
-
         # numx = int(M.shape[1] ** (1./3) + 1)
         # numy = numx
         # self.numx = 50  # for template model
         # self.numy = 50
+        # self.numx = 88  # for kidney model
+        # self.numy = 75
 
         # try:
-        #     logging.debug(f'self.numx, self.numy = {self.numx}, {self.numy}')
-        #     # print(f'vis_tab.py: self.numx, self.numy = {self.numx}, {self.numy}')
+        #     print("plot_substrate(): self.numx, self.numy = ",self.numx, self.numy )
         # except:
-        #     logging.debug(f'Error: self.numx, self.numy not defined.')
+        #     print("Error: self.numx, self.numy not defined.")
         #     return
         # nxny = numx * numy
 
@@ -1524,39 +881,50 @@ class Vis(QWidget):
             xgrid = M[0, :].reshape(self.numy, self.numx)
             ygrid = M[1, :].reshape(self.numy, self.numx)
         except:
-            print("error: cannot reshape ",self.numy, self.numx," for array ",M.shape)
-            logging.debug(f'error: cannot reshape {self.numy}, {self.numx} for array {M.shape}')
+            # print("error: cannot reshape ",self.numy, self.numx," for array ",M.shape)
+            print("vis_tab.py: unable to reshape substrate array; return")
             return
 
         zvals = M[self.field_index,:].reshape(self.numy,self.numx)
+        # print("zvals.min() = ",zvals.min())
+        # print("zvals.max() = ",zvals.max())
+
 
         contour_ok = True
+        # if (self.colormap_fixed_toggle.value):
+        # self.field_index = 4
 
-        if (self.fix_cmap_flag):
-            try:
-                # self.fixed_contour_levels = MaxNLocator(nbins=self.num_contours).tick_values(self.cmin_value, self.cmax_value)
-                # substrate_plot = self.ax0.contourf(xgrid, ygrid, M[self.field_index, :].reshape(self.numy, self.numx), levels=levels, extend='both', cmap=self.colormap_dd.value, fontsize=self.fontsize)
+        if (self.contour_mesh):
+            if (self.fix_cmap_flag):
+                try:
+                    substrate_plot = self.ax0.pcolormesh(xgrid,ygrid, zvals, shading=self.shading_choice, cmap=cbar_name, vmin=self.cmin_value, vmax=self.cmax_value)
+                except:
+                    contour_ok = False
+                    print('\nWARNING: exception with fixed colormap range. Will not update plot.')
+            else:    
+                try:
+                    # substrate_plot = self.ax0.contourf(xgrid, ygrid, zvals, self.num_contours, cmap=cbar_name)  # self.colormap_dd.value)
 
-                # substrate_plot = self.ax0.contourf(xgrid, ygrid, zvals, self.num_contours, levels=self.fixed_contour_levels, extend='both', cmap='viridis')
+                    substrate_plot = self.ax0.pcolormesh(xgrid,ygrid, zvals, shading=self.shading_choice, cmap=cbar_name) #, vmin=Z.min(), vmax=Z.max())
+                except:
+                    contour_ok = False
+                    print('\nWARNING: exception with dynamic colormap range. Will not update plot.')
 
-                substrate_plot = self.ax0.pcolormesh(xgrid,ygrid, zvals, shading=self.shading_choice, cmap='viridis', vmin=self.cmin_value, vmax=self.cmax_value)
-            except:
-                contour_ok = False
-                print('\nWARNING: exception with fixed colormap range. Will not update plot.')
-                return
-        else:    
-            try:
-                # substrate_plot = self.ax0.contourf(xgrid, ygrid, zvals, self.num_contours, cmap='viridis')  # self.colormap_dd.value)
-                # substrate_plot = self.ax0.pcolormesh(xgrid,ygrid, zvals, shading='gouraud', cmap='viridis') #, vmin=Z.min(), vmax=Z.max())
-                # substrate_plot = self.ax0.pcolormesh(xgrid,ygrid, zvals, cmap='viridis') #, vmin=Z.min(), vmax=Z.max())
-
-                # substrate_plot = self.ax0.pcolormesh(xgrid,ygrid, zvals, shading='flat', cmap='viridis') #, vmin=Z.min(), vmax=Z.max())
-                substrate_plot = self.ax0.pcolormesh(xgrid,ygrid, zvals, shading=self.shading_choice, cmap='viridis') #, vmin=Z.min(), vmax=Z.max())
-
-            except:
-                contour_ok = False
-                print('\nWARNING: exception with dynamic colormap range. Will not update plot.')
-                return
+        if (self.contour_lines):
+            if (self.fix_cmap_flag):
+                try:
+                    delstep = (self.cmax_value - self.cmin_value) / 8
+                    levels = np.arange(self.cmin_value + delstep, self.cmax_value, delstep)
+                    substrate_plot = self.ax0.contour(xgrid,ygrid,zvals, levels=levels, cmap=cbar_name, vmin=self.cmin_value, vmax=self.cmax_value)  # contour lines
+                except:
+                    print("vis_tab: No contour levels were found within the data range.")
+                    return
+            else:    
+                try:
+                    substrate_plot = self.ax0.contour(xgrid,ygrid,zvals, cmap=cbar_name)  # contour lines
+                except:
+                    print("vis_tab: No contour levels were found within the data range.")
+                    return
 
         # in case we want to plot a "0.0" contour line
         # if self.field_index > 4:
@@ -1564,31 +932,40 @@ class Vis(QWidget):
 
         # Do this funky stuff to prevent the colorbar from shrinking in height with each redraw.
         # Except it doesn't seem to work when we use fixed ranges on the colorbar?!
-        logging.debug(f'# axes = {len(self.figure.axes)}')
-        if len(self.figure.axes) > 1: 
-            pts = self.figure.axes[-1].get_position().get_points()
-            # print("type(pts) = ",type(pts))
-            # pts = [[0.78375, 0.11][0.81037234, 0.88]]
-            pts = np.array([[0.78375, 0.11],[0.81037234, 0.88]])
-
-            # print("figure.axes pts = ",pts)
-            label = self.figure.axes[-1].get_ylabel()
-            self.figure.axes[-1].remove()  # replace/update the colorbar
-            cax = self.figure.add_axes([pts[0][0],pts[0][1],pts[1][0]-pts[0][0],pts[1][1]-pts[0][1]  ])
-            self.cbar = self.figure.colorbar(substrate_plot, cax=cax)
-            self.cbar.ax.set_ylabel(label)
-            self.cbar.ax.tick_params(labelsize=self.fontsize)
-
-            # unfortunately the aspect is different between the initial call to colorbar 
-            #   without cax argument. Try to reset it (but still it's somehow different)
-            # self.cbar.ax.set_aspect(20)
+        # print("------- plot_substrate() -------------")
+        num_axes =  len(self.figure.axes)
+        # print("# axes = ",num_axes)
+        if self.cax1:
+            self.cax1.remove()  # replace/update the colorbar
+            # print("# axes(after substrate remove) = ",len(self.figure.axes))
+            # print(" self.figure.axes= ",self.figure.axes)
+            #ppp
+            ax1_divider = make_axes_locatable(self.ax0)
+            self.cax1 = ax1_divider.append_axes("right", size="4%", pad="2%")
+            try:
+                self.cbar1 = self.figure.colorbar(substrate_plot, cax=self.cax1)
+            except:
+                print("vis_tab: No contour levels were found within the data range.")
+            # print("\n# axes(redraw substrate) = ",len(self.figure.axes))
+            # print(" self.figure.axes= ",self.figure.axes)
+            self.cbar1.ax.tick_params(labelsize=self.fontsize)
         else:
-            # plt.colorbar(im)
-            self.figure.colorbar(substrate_plot)
+            ax1_divider = make_axes_locatable(self.ax0)
+            self.cax1 = ax1_divider.append_axes("right", size="4%", pad="2%")
+            try:
+                self.cbar1 = self.figure.colorbar(substrate_plot, cax=self.cax1)
+            except:
+                print("vis_tab: No contour levels were found within the data range.")
+                return
+            self.cbar1.ax.tick_params(labelsize=self.fontsize)
+            # print("(init substrate) self.figure.axes= ",self.figure.axes)
 
+        self.cbar1.set_label(self.substrate_name)
         self.ax0.set_title(self.title_str, fontsize=self.title_fontsize)
-
         self.ax0.set_xlim(self.plot_xmin, self.plot_xmax)
-
         self.ax0.set_ylim(self.plot_ymin, self.plot_ymax)
-        self.ax0.set_aspect(1.0)
+
+        if self.view_aspect_square:
+            self.ax0.set_aspect('equal')
+        else:
+            self.ax0.set_aspect('auto')
